@@ -198,8 +198,8 @@ void drawModifiedPixmap(QPainter &painter, const QRectF &rect,
     painter.scale(modifiers.flipHorizontal ? -1.0 : 1.0,
                   modifiers.flipVertical ? -1.0 : 1.0);
     painter.drawPixmap(QRectF(-size.width() / 2, -size.height() / 2,
-            size.width(), size.height()),
-        pixmap, QRectF());
+                size.width(), size.height()),
+            pixmap, QRectF());
     painter.restore();
 }
 
