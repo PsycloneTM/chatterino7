@@ -508,6 +508,18 @@ EmotePtr parseEmote(TwitchChannel *twitchChannel, const QString &userID,
     return {};
 }
 
+/// Returns a copy of `emote` that is flagged as zero-width (BTTV's `z!`).
+EmotePtr withZeroWidth(const EmotePtr &emote)
+{
+    if (emote->zeroWidth)
+    {
+        return emote;
+    }
+    auto copy = std::make_shared<Emote>(*emote);
+    copy->zeroWidth = true;
+    return copy;
+}
+
 std::pair<QString, bool> parseMessageType(Communi::TagsRef tags)
 {
     auto msgId = tags.getOrEmpty("msg-id");
@@ -1997,8 +2009,37 @@ void MessageBuilder::addEmoji(const EmotePtr &emote)
     this->emplace<EmoteElement>(emote, MessageElementFlag::EmojiAll);
 }
 
+void MessageBuilder::flushPendingModifiers(TextState &state)
+{
+    for (const auto &word : state.pendingModifiers)
+    {
+        this->addWordFromUserMessage(word, state.twitchChannel);
+    }
+    state.pendingModifiers.clear();
+}
+
 void MessageBuilder::addTextOrEmote(TextState &state, QString string)
 {
+    if (getSettings()->enableZeroWidthEmotes && string == u"z!")
+    {
+        // BTTV modifier: makes the next emote zero-width.
+        state.pendingModifiers.append(string);
+        return;
+    }
+
+    if (!state.pendingModifiers.isEmpty())
+    {
+        if (auto emote = parseEmote(state.twitchChannel, state.userID,
+                                    EmoteNameView{string}))
+        {
+            state.pendingModifiers.clear();
+            this->appendEmote(withZeroWidth(emote));
+            return;
+        }
+        // Not followed by an emote: show the modifier as text
+        this->flushPendingModifiers(state);
+    }
+
     if (state.hasBits && this->tryAppendCheermote(state, string))
     {
         // This string was parsed as a cheermote
@@ -2862,17 +2903,29 @@ void MessageBuilder::addWords(
                 this->addTextOrEmote(state, tok.text.toString());
             },
             [&](const TokenizedEmoji &tok) {
+                this->flushPendingModifiers(state);
                 this->addEmoji(tok.emote);
             },
             [&](const TokenizedEmote &tok) {
+                if (!state.pendingModifiers.isEmpty())
+                {
+                    state.pendingModifiers.clear();
+                    this->appendEmote(withZeroWidth(tok.emote));
+                    this->back().setTrailingSpace(tok.trailingSpace);
+                    return;
+                }
                 this->emplace<EmoteElement>(
                         tok.emote, MessageElementFlag::Emote, this->textColor_)
                     ->setTrailingSpace(tok.trailingSpace);
             },
             [&](const TokenizedGif &gif) {
+                this->flushPendingModifiers(state);
                 this->addTwitchGif(gif.id, gif.originalText);
             },
         });
+
+    // A trailing `z!` with no emote after it is just text
+    this->flushPendingModifiers(state);
 }
 
 void MessageBuilder::appendTwitchBadges(Communi::TagsRef tags,
