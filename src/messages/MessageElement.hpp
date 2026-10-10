@@ -541,6 +541,11 @@ private:
 // contains emote data and will pick the emote based on :
 //   a) are images for the emote type enabled
 //   b) which size it wants
+/// Scale factor applied to emotes gigantified through Twitch's "Gigantify an
+/// Emote" bits power-up. Twitch's largest emote asset (3.0) is 4x the size of
+/// the base (1.0) one.
+inline constexpr float GIGANTIFIED_EMOTE_SCALE = 4.F;
+
 class EmoteElement : public MessageElement
 {
 public:
@@ -555,6 +560,12 @@ public:
 
     const EmoteModifiers &modifiers() const;
     void setModifiers(const EmoteModifiers &modifiers);
+
+    /// Whether this emote was gigantified (Twitch's "Gigantify an Emote" bits
+    /// power-up). Gigantified emotes are drawn `GIGANTIFIED_EMOTE_SCALE` times
+    /// larger.
+    bool isGigantified() const;
+    void setGigantified(bool gigantified);
 
     /// The emotes of the modifier words (e.g. `w!`, `ffzX`) applied to this
     /// emote. Only used for the tooltip.
@@ -577,6 +588,7 @@ private:
     bool usingFallbackColor_ = false;
     EmoteModifiers modifiers_;
     std::vector<EmotePtr> modifierEmotes_;
+    bool gigantified_ = false;
 
     EmotePtr emote_;
 };
@@ -599,6 +611,10 @@ public:
         const MessageColor &textElementColor = MessageColor::Text);
 
     void addEmoteLayer(const Emote &emote);
+
+    /// See `EmoteElement::isGigantified`
+    bool isGigantified() const;
+    void setGigantified(bool gigantified);
 
     void addToContainer(MessageLayoutContainer &container,
                         const MessageLayoutContext &ctx) override;
@@ -628,6 +644,7 @@ private:
 
     std::unique_ptr<TextElement> textElement_;
     MessageColor textElementColor_;
+    bool gigantified_ = false;
 };
 
 class BadgeElement : public MessageElement
