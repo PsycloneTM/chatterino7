@@ -297,6 +297,24 @@ void EmoteElement::setModifiers(const EmoteModifiers &modifiers)
     this->modifiers_ = modifiers;
 }
 
+const std::vector<EmotePtr> &EmoteElement::modifierEmotes() const
+{
+    return this->modifierEmotes_;
+}
+
+void EmoteElement::addModifierEmote(const EmotePtr &emote)
+{
+    // Using the same modifier twice doesn't do anything extra
+    for (const auto &existing : this->modifierEmotes_)
+    {
+        if (existing->name == emote->name)
+        {
+            return;
+        }
+    }
+    this->modifierEmotes_.push_back(emote);
+}
+
 void EmoteElement::addToContainer(MessageLayoutContainer &container,
                                   const MessageLayoutContext &ctx)
 {
@@ -322,6 +340,10 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
             if (this->modifiers_.wide)
             {
                 size.setWidth(size.width() * 2);
+            }
+            if (this->modifiers_.isSideways())
+            {
+                size.transpose();
             }
 
             container.addElement(this->makeImageLayoutElement(image, size));
@@ -380,6 +402,14 @@ QJsonObject EmoteElement::toJson() const
     {
         base["flipVertical"_L1] = true;
     }
+    if (this->modifiers_.rotateLeft)
+    {
+        base["rotateLeft"_L1] = true;
+    }
+    if (this->modifiers_.rotateRight)
+    {
+        base["rotateRight"_L1] = true;
+    }
     if (this->textElement_)
     {
         base["text"_L1] = this->textElement_->toJson();
@@ -398,6 +428,7 @@ std::unique_ptr<MessageElement> EmoteElement::clone() const
     auto elem = std::make_unique<EmoteElement>(this->emote_, this->getFlags(),
                                                this->textColor_);
     elem->modifiers_ = this->modifiers_;
+    elem->modifierEmotes_ = this->modifierEmotes_;
     elem->cloneFrom(*this);
     return elem;
 }
