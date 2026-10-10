@@ -102,7 +102,7 @@ private:
 };
 
 /// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!`, `l!`, `r!`, `c!`,
-/// `p!` (applied to the next emote) and FFZ's `ffzW`, `ffzX`, `ffzY`,
+/// `p!`, `s!` (applied to the next emote) and FFZ's `ffzW`, `ffzX`, `ffzY`,
 /// `ffzCursed` (applied to the previous emote).
 struct EmoteModifiers {
     bool wide = false;
@@ -114,12 +114,31 @@ struct EmoteModifiers {
     /// modifiers, this isn't applied while painting but baked into the image
     /// once (see `Image::withEffect`).
     ImageEffect colorEffect = ImageEffect::None;
+    /// `s!`. Baked into the image like `colorEffect` (and combinable with it).
+    bool shake = false;
 
     bool any() const
     {
         return this->wide || this->flipHorizontal || this->flipVertical ||
                this->rotateLeft || this->rotateRight ||
-               this->colorEffect != ImageEffect::None;
+               this->colorEffect != ImageEffect::None || this->shake;
+    }
+
+    /// The effect that gets baked into the image of the emote (see
+    /// `Image::withEffect`).
+    ImageEffect imageEffect() const
+    {
+        switch (this->colorEffect)
+        {
+            case ImageEffect::Cursed:
+                return this->shake ? ImageEffect::CursedShake
+                                   : ImageEffect::Cursed;
+            case ImageEffect::Party:
+                return this->shake ? ImageEffect::PartyShake
+                                   : ImageEffect::Party;
+            default:
+                return this->shake ? ImageEffect::Shake : ImageEffect::None;
+        }
     }
 
     /// Clockwise rotation in degrees (0, 90, 180 or 270).
@@ -148,6 +167,7 @@ struct EmoteModifiers {
         {
             this->colorEffect = other.colorEffect;
         }
+        this->shake |= other.shake;
     }
 };
 
