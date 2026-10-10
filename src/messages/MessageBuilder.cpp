@@ -508,18 +508,6 @@ EmotePtr parseEmote(TwitchChannel *twitchChannel, const QString &userID,
     return {};
 }
 
-/// Returns a copy of `emote` that is flagged as zero-width (BTTV's `z!`).
-EmotePtr withZeroWidth(const EmotePtr &emote)
-{
-    if (emote->zeroWidth)
-    {
-        return emote;
-    }
-    auto copy = std::make_shared<Emote>(*emote);
-    copy->zeroWidth = true;
-    return copy;
-}
-
 std::pair<QString, bool> parseMessageType(Communi::TagsRef tags)
 {
     auto msgId = tags.getOrEmpty("msg-id");
@@ -2020,9 +2008,9 @@ void MessageBuilder::flushPendingModifiers(TextState &state)
 
 void MessageBuilder::addTextOrEmote(TextState &state, QString string)
 {
-    if (getSettings()->enableZeroWidthEmotes && string == u"z!")
+    if (string == u"w!")
     {
-        // BTTV modifier: makes the next emote zero-width.
+        // BTTV modifier: makes the next emote wide.
         state.pendingModifiers.append(string);
         return;
     }
@@ -2033,7 +2021,7 @@ void MessageBuilder::addTextOrEmote(TextState &state, QString string)
                                     EmoteNameView{string}))
         {
             state.pendingModifiers.clear();
-            this->appendEmote(withZeroWidth(emote));
+            this->appendEmote(emote, true);
             return;
         }
         // Not followed by an emote: show the modifier as text
@@ -2851,7 +2839,8 @@ Outcome MessageBuilder::tryAppendEmote(TwitchChannel *twitchChannel,
     return Success;
 }
 
-void MessageBuilder::appendEmote(const EmotePtr &emote)
+void MessageBuilder::appendEmote(const EmotePtr &emote, bool wide,
+                                 bool trailingSpace)
 {
     if (emote->zeroWidth && getSettings()->enableZeroWidthEmotes &&
         !this->isEmpty())
@@ -2887,8 +2876,10 @@ void MessageBuilder::appendEmote(const EmotePtr &emote)
         // No emote to merge with, just show as regular emote
     }
 
-    this->emplace<EmoteElement>(emote, MessageElementFlag::Emote,
-                                this->textColor_);
+    auto *element = this->emplace<EmoteElement>(
+        emote, MessageElementFlag::Emote, this->textColor_);
+    element->setWide(wide);
+    element->setTrailingSpace(trailingSpace);
 }
 
 void MessageBuilder::addWords(
@@ -2910,8 +2901,7 @@ void MessageBuilder::addWords(
                 if (!state.pendingModifiers.isEmpty())
                 {
                     state.pendingModifiers.clear();
-                    this->appendEmote(withZeroWidth(tok.emote));
-                    this->back().setTrailingSpace(tok.trailingSpace);
+                    this->appendEmote(tok.emote, true, tok.trailingSpace);
                     return;
                 }
                 this->emplace<EmoteElement>(
@@ -2924,7 +2914,7 @@ void MessageBuilder::addWords(
             },
         });
 
-    // A trailing `z!` with no emote after it is just text
+    // A trailing `w!` with no emote after it is just text
     this->flushPendingModifiers(state);
 }
 
