@@ -158,8 +158,8 @@ QList<Frame> renderPartyFrames(const QList<Frame> &source)
         for (int i = 0; i < PARTY_STILL_FRAME_COUNT; i++)
         {
             out.append(Frame{
-                .image = renderHueRotated(
-                    images.first(), 360.0 * i / PARTY_STILL_FRAME_COUNT),
+                .image = renderHueRotated(images.first(),
+                                          360.0 * i / PARTY_STILL_FRAME_COUNT),
                 .duration = PARTY_STILL_FRAME_DURATION_MS,
             });
         }
