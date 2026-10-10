@@ -12,6 +12,7 @@
 #include "controllers/emotes/EmoteController.hpp"
 #include "debug/AssertInGuiThread.hpp"
 #include "debug/Benchmark.hpp"
+#include "messages/ImageEffectRenderer.hpp"
 #include "singletons/helper/GifTimer.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/DebugCount.hpp"
@@ -19,6 +20,7 @@
 #include "util/PostToThread.hpp"
 
 #include <boost/functional/hash.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <pajlada/signals/scoped-connection.hpp>
 #include <QBuffer>
 #include <QFile>
@@ -42,6 +44,9 @@ const auto IMAGE_POOL_IMAGE_LIFETIME = std::chrono::minutes(10);
 namespace {
 
 using namespace chatterino;
+
+static_assert(IMAGE_EFFECT_COUNT == magic_enum::enum_count<ImageEffect>(),
+              "IMAGE_EFFECT_COUNT is out of sync with ImageEffect");
 
 std::pair<QSize, bool> limitedAutoScaleSize(
     QSize original, std::optional<uint16_t> optAutoScale)
@@ -82,6 +87,7 @@ struct Frames::Storage {
     virtual void start(GIFTimer *timer) = 0;
     virtual std::optional<QPixmap> current() const = 0;
     virtual std::optional<QSize> frameSize() const = 0;
+    virtual QList<Frame> snapshot() const = 0;
 
     pajlada::Signals::ScopedConnection gifTimerConnection;
 };
@@ -196,6 +202,11 @@ struct Frames::CachedFrames : Storage {
         return this->items.front().image.size();
     }
 
+    QList<Frame> snapshot() const override
+    {
+        return this->items;
+    }
+
     QList<Frame> items;
     QList<Frame>::size_type index{0};
     int durationOffset{0};
@@ -289,6 +300,11 @@ std::optional<QPixmap> Frames::current() const
 std::optional<QSize> Frames::frameSize() const
 {
     return this->storage_->frameSize();
+}
+
+QList<Frame> Frames::snapshot() const
+{
+    return this->storage_->snapshot();
 }
 
 QList<Frame> readFrames(QImageReader &reader, const Url &url,
@@ -517,6 +533,37 @@ Image::Image(qreal scale)
 {
 }
 
+Image::Image(const ImagePtr &source, ImageEffect effect)
+    : url_(source->url_)
+    , scale_(source->scale_)
+    , expectedSize_(source->expectedSize_)
+    , shouldLoad_(true)
+    , frames_(std::make_unique<detail::Frames>())
+    , effect_(effect)
+    , effectSource_(source)
+{
+}
+
+ImagePtr Image::withEffect(ImageEffect effect)
+{
+    assertInGuiThread();
+
+    if (effect == ImageEffect::None || this->effect_ != ImageEffect::None ||
+        this->empty_)
+    {
+        return this->shared_from_this();
+    }
+
+    std::lock_guard lock(this->effectImagesMutex_);
+
+    auto &derived = this->effectImages_[static_cast<std::size_t>(effect)];
+    if (!derived)
+    {
+        derived = ImagePtr(new Image(this->shared_from_this(), effect));
+    }
+    return derived;
+}
+
 void Image::setPixmap(const QPixmap &pixmap)
 {
     auto setFrames = [shared = this->shared_from_this(), pixmap]() {
@@ -661,8 +708,55 @@ QSizeF Image::size() const
     return this->expectedSize_.toSizeF() * this->scale_;
 }
 
+void Image::loadEffect()
+{
+    assertInGuiThread();
+
+    auto source = this->effectSource_.lock();
+    if (!source || source->isEmpty())
+    {
+        this->empty_ = true;
+        return;
+    }
+
+    // This also starts loading the source if it isn't loaded yet.
+    source->load();
+
+    QList<detail::Frame> frames;
+    if (source->frames_)
+    {
+        frames = source->frames_->snapshot();
+    }
+    if (frames.isEmpty())
+    {
+        // The source isn't loaded yet. Try again the next time this image
+        // is used (which happens once the source is loaded and the views are
+        // laid out again).
+        this->shouldLoad_ = true;
+        return;
+    }
+
+    // The scale of auto-scaled images is only known after they're loaded.
+    this->scale_ = source->scale_;
+
+    // Render the effect once, off the GUI thread. The result replaces the
+    // (empty) frames of this image, just like a downloaded image would.
+    QThreadPool::globalInstance()->start(
+        [weak = weakOf(this), frames = std::move(frames),
+         effect = this->effect_]() mutable {
+            auto rendered = detail::renderImageEffect(frames, effect);
+            detail::assignFrames(weak, std::move(rendered));
+        });
+}
+
 void Image::actuallyLoad()
 {
+    if (this->effect_ != ImageEffect::None)
+    {
+        this->loadEffect();
+        return;
+    }
+
     auto weak = weakOf(this);
     auto onSuccess = [weak](const auto &result) {
         auto shared = weak.lock();
