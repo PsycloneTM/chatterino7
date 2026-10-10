@@ -743,8 +743,9 @@ void Image::loadEffect()
     // (empty) frames of this image, just like a downloaded image would.
     QThreadPool::globalInstance()->start([weak = weakOf(this),
                                           frames = std::move(frames),
-                                          effect = this->effect_]() mutable {
-        auto rendered = detail::renderImageEffect(frames, effect);
+                                          effect = this->effect_,
+                                          scale = this->scale_]() mutable {
+        auto rendered = detail::renderImageEffect(frames, effect, scale);
         detail::assignFrames(weak, std::move(rendered));
     });
 }
