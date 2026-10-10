@@ -297,11 +297,6 @@ void EmoteElement::setModifiers(const EmoteModifiers &modifiers)
     this->modifiers_ = modifiers;
 }
 
-bool EmoteElement::isGigantified() const
-{
-    return this->gigantified_;
-}
-
 void EmoteElement::setGigantified(bool gigantified)
 {
     this->gigantified_ = gigantified;
@@ -489,16 +484,6 @@ void LayeredEmoteElement::addEmoteLayer(const LayeredEmoteElement::Emote &emote)
     this->updateTooltips();
 }
 
-bool LayeredEmoteElement::isGigantified() const
-{
-    return this->gigantified_;
-}
-
-void LayeredEmoteElement::setGigantified(bool gigantified)
-{
-    this->gigantified_ = gigantified;
-}
-
 void LayeredEmoteElement::addToContainer(MessageLayoutContainer &container,
                                          const MessageLayoutContext &ctx)
 {
@@ -506,18 +491,14 @@ void LayeredEmoteElement::addToContainer(MessageLayoutContainer &container,
     {
         if (ctx.flags.has(MessageElementFlag::EmoteImage))
         {
-            const float gigantifyScale =
-                this->gigantified_ ? GIGANTIFIED_EMOTE_SCALE : 1.F;
-            auto images = this->getLoadedImages(container.getImageScale() *
-                                                gigantifyScale);
+            auto images = this->getLoadedImages(container.getImageScale());
             if (images.empty())
             {
                 return;
             }
 
             auto emoteScale = getSettings()->emoteScale.getValue();
-            float overallScale =
-                emoteScale * container.getScale() * gigantifyScale;
+            float overallScale = emoteScale * container.getScale();
 
             auto largestSize = getBoundingBoxSize(images) * overallScale;
             std::vector<QSizeF> individualSizes;
@@ -683,10 +664,6 @@ QJsonObject LayeredEmoteElement::toJson() const
     }
 
     base["textElementColor"_L1] = this->textElementColor_.toString();
-    if (this->gigantified_)
-    {
-        base["gigantified"_L1] = true;
-    }
 
     return base;
 }
@@ -701,7 +678,6 @@ std::unique_ptr<MessageElement> LayeredEmoteElement::clone() const
     std::vector<Emote> emotesCopy = this->emotes_;
     auto elem = std::make_unique<LayeredEmoteElement>(
         std::move(emotesCopy), this->getFlags(), this->textElementColor_);
-    elem->gigantified_ = this->gigantified_;
     elem->cloneFrom(*this);
     return elem;
 }
