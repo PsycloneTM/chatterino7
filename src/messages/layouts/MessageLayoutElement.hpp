@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common/FlagsEnum.hpp"
+#include "messages/ImageEffect.hpp"
 #include "messages/Link.hpp"
 #include "messages/MessageColor.hpp"
 
@@ -100,20 +101,25 @@ private:
     int wordId_ = -1;
 };
 
-/// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!`, `l!`, `r!` (applied
-/// to the next emote) and FFZ's `ffzW`, `ffzX`, `ffzY` (applied to the
-/// previous emote).
+/// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!`, `l!`, `r!`, `c!`,
+/// `p!` (applied to the next emote) and FFZ's `ffzW`, `ffzX`, `ffzY`,
+/// `ffzCursed` (applied to the previous emote).
 struct EmoteModifiers {
     bool wide = false;
     bool flipHorizontal = false;
     bool flipVertical = false;
     bool rotateLeft = false;
     bool rotateRight = false;
+    /// `c!`/`ffzCursed` (black and white) or `p!` (rainbow). Unlike the other
+    /// modifiers, this isn't applied while painting but baked into the image
+    /// once (see `Image::withEffect`).
+    ImageEffect colorEffect = ImageEffect::None;
 
     bool any() const
     {
         return this->wide || this->flipHorizontal || this->flipVertical ||
-               this->rotateLeft || this->rotateRight;
+               this->rotateLeft || this->rotateRight ||
+               this->colorEffect != ImageEffect::None;
     }
 
     /// Clockwise rotation in degrees (0, 90, 180 or 270).
@@ -137,6 +143,11 @@ struct EmoteModifiers {
         this->flipVertical |= other.flipVertical;
         this->rotateLeft |= other.rotateLeft;
         this->rotateRight |= other.rotateRight;
+        // Color effects don't combine, the last one wins (`c! p!` is rainbow)
+        if (other.colorEffect != ImageEffect::None)
+        {
+            this->colorEffect = other.colorEffect;
+        }
     }
 };
 
