@@ -171,6 +171,35 @@ size_t ImageLayoutElement::getSelectionIndexCount() const
     return this->trailingSpace ? 2 : 1;
 }
 
+namespace {
+
+/// Draws `pixmap` into `rect`, mirrored if the modifiers ask for it.
+void drawModifiedPixmap(QPainter &painter, const QRectF &rect,
+                        const QPixmap &pixmap, const EmoteModifiers &modifiers)
+{
+    if (!modifiers.flipHorizontal && !modifiers.flipVertical)
+    {
+        painter.drawPixmap(rect, pixmap, QRectF());
+        return;
+    }
+
+    painter.save();
+    painter.translate(rect.center());
+    painter.scale(modifiers.flipHorizontal ? -1.0 : 1.0,
+                  modifiers.flipVertical ? -1.0 : 1.0);
+    painter.drawPixmap(QRectF(-rect.width() / 2, -rect.height() / 2,
+                              rect.width(), rect.height()),
+                       pixmap, QRectF());
+    painter.restore();
+}
+
+}  // namespace
+
+void ImageLayoutElement::setModifiers(const EmoteModifiers &modifiers)
+{
+    this->modifiers_ = modifiers;
+}
+
 void ImageLayoutElement::paint(QPainter &painter,
                                const MessageColors & /*messageColors*/)
 {
@@ -183,7 +212,8 @@ void ImageLayoutElement::paint(QPainter &painter,
     if (pixmap && !this->image_->animated())
     {
         // fourtf: make it use qreal values
-        painter.drawPixmap(QRectF(this->getRect()), *pixmap, QRectF());
+        drawModifiedPixmap(painter, QRectF(this->getRect()), *pixmap,
+                           this->modifiers_);
     }
 }
 
@@ -200,7 +230,8 @@ bool ImageLayoutElement::paintAnimated(QPainter &painter, qreal yOffset)
         {
             auto rect = this->getRect();
             rect.moveTop(rect.y() + yOffset);
-            painter.drawPixmap(QRectF(rect), *pixmap, QRectF());
+            drawModifiedPixmap(painter, QRectF(rect), *pixmap,
+                               this->modifiers_);
             return true;
         }
     }
