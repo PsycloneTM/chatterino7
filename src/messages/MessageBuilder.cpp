@@ -2943,9 +2943,10 @@ Outcome MessageBuilder::tryAppendEmote(TwitchChannel *twitchChannel,
     return Success;
 }
 
-void MessageBuilder::appendEmote(
-    const EmotePtr &emote, const EmoteModifiers &modifiers,
-    const std::vector<EmotePtr> &modifierEmotes, bool trailingSpace)
+void MessageBuilder::appendEmote(const EmotePtr &emote,
+                                 const EmoteModifiers &modifiers,
+                                 const std::vector<EmotePtr> &modifierEmotes,
+                                 bool trailingSpace)
 {
     if (emote->zeroWidth && getSettings()->enableZeroWidthEmotes &&
         !this->isEmpty())
