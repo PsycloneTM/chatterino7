@@ -100,11 +100,33 @@ private:
     int wordId_ = -1;
 };
 
+/// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!` (applied to the next
+/// emote) and FFZ's `ffzW`, `ffzX`, `ffzY` (applied to the previous emote).
+struct EmoteModifiers {
+    bool wide = false;
+    bool flipHorizontal = false;
+    bool flipVertical = false;
+
+    bool any() const
+    {
+        return this->wide || this->flipHorizontal || this->flipVertical;
+    }
+
+    void merge(const EmoteModifiers &other)
+    {
+        this->wide |= other.wide;
+        this->flipHorizontal |= other.flipHorizontal;
+        this->flipVertical |= other.flipVertical;
+    }
+};
+
 // IMAGE
 class ImageLayoutElement : public MessageLayoutElement
 {
 public:
     ImageLayoutElement(MessageElement &creator, ImagePtr image, QSizeF size);
+
+    void setModifiers(const EmoteModifiers &modifiers);
 
 protected:
     void addCopyTextToString(QString &str, uint32_t from = 0,
@@ -116,6 +138,7 @@ protected:
     qreal getXFromIndex(size_t index) override;
 
     ImagePtr image_;
+    EmoteModifiers modifiers_;
 };
 
 class LayeredImageLayoutElement : public MessageLayoutElement
