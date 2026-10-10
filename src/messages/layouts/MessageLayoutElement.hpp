@@ -102,7 +102,7 @@ private:
 };
 
 /// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!`, `l!`, `r!`, `c!`,
-/// `p!`, `s!` (applied to the next emote) and FFZ's `ffzW`, `ffzX`, `ffzY`,
+/// `p!`, `s!`, `z!` (applied to the next emote) and FFZ's `ffzW`, `ffzX`, `ffzY`,
 /// `ffzCursed` (applied to the previous emote).
 struct EmoteModifiers {
     bool wide = false;
@@ -116,11 +116,14 @@ struct EmoteModifiers {
     ImageEffect colorEffect = ImageEffect::None;
     /// `s!`. Baked into the image like `colorEffect` (and combinable with it).
     bool shake = false;
+    /// `z!`. The emote is layered on top of the previous emote like zero-width
+    /// emotes (see `MessageBuilder::appendEmote`).
+    bool zeroWidth = false;
 
     bool any() const
     {
-        return this->wide || this->flipHorizontal || this->flipVertical ||
-               this->rotateLeft || this->rotateRight ||
+        return this->zeroWidth || this->wide || this->flipHorizontal ||
+               this->flipVertical || this->rotateLeft || this->rotateRight ||
                this->colorEffect != ImageEffect::None || this->shake;
     }
 
@@ -168,6 +171,7 @@ struct EmoteModifiers {
             this->colorEffect = other.colorEffect;
         }
         this->shake |= other.shake;
+        this->zeroWidth |= other.zeroWidth;
     }
 };
 
