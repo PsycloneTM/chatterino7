@@ -2238,11 +2238,37 @@ void ChannelView::mouseMoveEvent(QMouseEvent *event)
             if (emoteElement)
             {
                 auto scale = getSettings()->emoteTooltipScale.getEnum();
-                this->tooltipWidget_->setOne(TooltipEntry::scaled(
+                auto entry = TooltipEntry::scaled(
                     showThumbnail
                         ? emoteElement->getEmote()->images.getImage(3.0)
                         : nullptr,
-                    element->getTooltip(), getTooltipScale(scale)));
+                    element->getTooltip(), getTooltipScale(scale));
+
+                const auto &modifierEmotes = emoteElement->modifierEmotes();
+                if (modifierEmotes.empty())
+                {
+                    this->tooltipWidget_->setOne(std::move(entry));
+                }
+                else
+                {
+                    // Like layered emotes: the emote itself gets a large image
+                    // and its description, each modifier a small image and just
+                    // its name.
+                    std::vector<TooltipEntry> entries;
+                    entries.reserve(modifierEmotes.size() + 1);
+                    entries.push_back(std::move(entry));
+                    for (const auto &modifier : modifierEmotes)
+                    {
+                        entries.push_back(TooltipEntry::scaled(
+                            showThumbnail ? modifier->images.getImage(1.0)
+                                          : nullptr,
+                            modifier->name.string, getTooltipScale(scale)));
+                    }
+
+                    auto style = entries.size() > 2 ? TooltipStyle::Grid
+                                                    : TooltipStyle::Vertical;
+                    this->tooltipWidget_->set(entries, style);
+                }
             }
             else if (layeredEmoteElement)
             {
