@@ -168,6 +168,7 @@ public:
 
     void appendEmote(const EmotePtr &emote,
                      const EmoteModifiers &modifiers = {},
+                     const std::vector<EmotePtr> &modifierEmotes = {},
                      bool trailingSpace = true);
 
     MessageColor textColor() const;
@@ -277,15 +278,16 @@ private:
         /// normal emotes.
         QStringList pendingModifiers;
         EmoteModifiers pendingModifierFlags;
+        std::vector<EmotePtr> pendingModifierEmotes;
     };
     /// Adds any buffered modifier words from `state` as normal emotes/text.
     void flushPendingModifiers(TextState &state);
-    /// Clears the buffered modifier words and returns the modifiers they stood
-    /// for.
-    static EmoteModifiers takePendingModifiers(TextState &state);
+    /// Clears the buffered modifier words.
+    static void clearPendingModifiers(TextState &state);
     /// Applies `modifiers` to the emote directly before the current word (FFZ
     /// suffix modifiers). Returns false if there is no such emote.
-    bool applyToPreviousEmote(const EmoteModifiers &modifiers);
+    bool applyToPreviousEmote(const EmoteModifiers &modifiers,
+                              const EmotePtr &modifierEmote);
     void addEmoji(const EmotePtr &emote);
     void addTextOrEmote(TextState &state, QString string);
 
