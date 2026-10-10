@@ -65,6 +65,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <unordered_set>
 
 using namespace chatterino::literals;
@@ -723,6 +724,31 @@ void tokenizeWordsWithEmoji(QStringView text,
             [&](const TokenizedGif &gif) {
                 visitor(gif);
             }});
+}
+
+/// Twitch's "Gigantify an Emote" bits power-up enlarges the last emote of a
+/// message. This marks that emote (only looking at elements from `start` on, so
+/// badges and the like are never touched). Emojis can't be gigantified.
+void gigantifyLastEmote(
+    const std::vector<std::unique_ptr<MessageElement>> &elements, size_t start)
+{
+    for (size_t i = elements.size(); i > start; i--)
+    {
+        auto *element = elements[i - 1].get();
+        if (auto *emote = dynamic_cast<EmoteElement *>(element))
+        {
+            if (emote->getFlags().has(MessageElementFlag::Emote))
+            {
+                emote->setGigantified(true);
+                return;
+            }
+        }
+        else if (auto *layered = dynamic_cast<LayeredEmoteElement *>(element))
+        {
+            layered->setGigantified(true);
+            return;
+        }
+    }
 }
 
 }  // namespace
@@ -2009,7 +2035,13 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         }
 
         // Add the content.
+        const auto contentStart = builder->elements.size();
         builder.addWords(content, twitchSpecials, textState);
+
+        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message")
+        {
+            gigantifyLastEmote(builder->elements, contentStart);
+        }
 
         QString stylizedUsername =
             stylizeUsername(builder->loginName, builder.message());
