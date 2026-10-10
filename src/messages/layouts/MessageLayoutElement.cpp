@@ -173,28 +173,34 @@ size_t ImageLayoutElement::getSelectionIndexCount() const
 
 namespace {
 
-/// Draws `pixmap` into `rect`, mirrored/rotated if the modifiers ask for it.
+/// Draws `pixmap` into `rect`, mirrored and/or rotated if the modifiers ask
+/// for it. For sideways emotes, `rect` is already the rotated (swapped) size.
 void drawModifiedPixmap(QPainter &painter, const QRectF &rect,
                         const QPixmap &pixmap, const EmoteModifiers &modifiers)
 {
     if (!modifiers.flipHorizontal && !modifiers.flipVertical &&
-        !modifiers.isSideways())
+        modifiers.rotation() == 0)
     {
         painter.drawPixmap(rect, pixmap, QRectF());
         return;
     }
 
+    // The size of the image before it's rotated
+    auto size = rect.size();
+    if (modifiers.isSideways())
+    {
+        size.transpose();
+    }
+
     painter.save();
     painter.translate(rect.center());
-    painter.rotate(modifiers.rotationDegrees());
+    painter.rotate(modifiers.rotation());
     painter.scale(modifiers.flipHorizontal ? -1.0 : 1.0,
                   modifiers.flipVertical ? -1.0 : 1.0);
-
-    // When sideways, the layout rect is transposed; draw the image at its
-    // unrotated size so the rotation fills the rect.
-    auto w = modifiers.isSideways() ? rect.height() : rect.width();
-    auto h = modifiers.isSideways() ? rect.width() : rect.height();
-    painter.drawPixmap(QRectF(-w / 2, -h / 2, w, h), pixmap, QRectF());
+    painter.drawPixmap(
+        QRectF(-size.width() / 2, -size.height() / 2, size.width(),
+               size.height()),
+        pixmap, QRectF());
     painter.restore();
 }
 
