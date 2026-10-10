@@ -16,17 +16,27 @@ namespace {
 
 using namespace chatterino::detail;
 
-/// Contrast applied after turning the image to grayscale (`c!`, `ffzCursed`).
-/// 1 is plain grayscale, higher values push towards pure black and white.
-constexpr float CURSED_CONTRAST = 2.0F;
+/// `c!` and `ffzCursed` are the same effect in BTTV and FFZ:
+/// CSS `grayscale(1) brightness(0.7) contrast(2.5)`
+/// (BetterTTV: src/modules/chat/style.css, FrankerFaceZ: modules/chat/emotes.js)
+constexpr float CURSED_BRIGHTNESS = 0.7F;
+constexpr float CURSED_CONTRAST = 2.5F;
 
-/// Length of the pre-rendered hue cycle of a still image (`p!`)
-constexpr int PARTY_STILL_FRAME_COUNT = 20;
-constexpr int PARTY_STILL_FRAME_DURATION_MS = 100;
+/// `p!` is BTTV's CSS animation `sepia(0.5) hue-rotate(0..360deg)
+/// saturate(2.5)` running linearly over 1.5s.
+constexpr float PARTY_SEPIA = 0.5F;
+constexpr float PARTY_SATURATE = 2.5F;
 
-/// An animated image is repeated until it's at least this long, so the hue
-/// doesn't cycle faster than it's pleasant for short animations.
-constexpr int PARTY_MIN_CYCLE_MS = 2000;
+/// Length of the pre-rendered hue cycle of a still image (`p!`).
+/// 25 * 60ms = 1.5s, the cycle length of BTTV. 60ms is a multiple of the GIF
+/// timer's 20ms step.
+constexpr int PARTY_STILL_FRAME_COUNT = 25;
+constexpr int PARTY_STILL_FRAME_DURATION_MS = 60;
+
+/// An animated image is repeated until it's at least this long (BTTV's cycle
+/// length), so the hue doesn't cycle faster than it's pleasant for short
+/// animations.
+constexpr int PARTY_MIN_CYCLE_MS = 1500;
 constexpr int PARTY_MAX_REPEATS = 8;
 /// Upper bound for the memory the frames of a party image may take
 constexpr qint64 PARTY_MAX_BYTES = chatterino::Image::maxBytesRam / 2;
@@ -52,6 +62,39 @@ ColorMatrix hueRotateMatrix(double degrees)
         0.213F - (cs * 0.213F) - (sn * 0.787F),
         0.715F - (cs * 0.715F) + (sn * 0.715F),
         0.072F + (cs * 0.928F) + (sn * 0.072F),
+    };
+}
+
+/// The matrix of CSS's `sepia(<amount>)` filter
+ColorMatrix sepiaMatrix(float amount)
+{
+    const float k = 1.0F - amount;
+    return {
+        0.393F + (0.607F * k), 0.769F - (0.769F * k), 0.189F - (0.189F * k),
+        0.349F - (0.349F * k), 0.686F + (0.314F * k), 0.168F - (0.168F * k),
+        0.272F - (0.272F * k), 0.534F - (0.534F * k), 0.131F + (0.869F * k),
+    };
+}
+
+/// The matrix of CSS's `saturate(<amount>)` filter
+ColorMatrix saturateMatrix(float s)
+{
+    return {
+        0.213F + (0.787F * s), 0.715F - (0.715F * s), 0.072F - (0.072F * s),
+        0.213F - (0.213F * s), 0.715F + (0.285F * s), 0.072F - (0.072F * s),
+        0.213F - (0.213F * s), 0.715F - (0.715F * s), 0.072F + (0.928F * s),
+    };
+}
+
+/// Every CSS filter function clamps its result to [0, 255] (here), so
+/// chained matrices can't be multiplied together beforehand.
+std::array<float, 3> applyMatrix(const ColorMatrix &m, const std::array<float, 3> &c)
+{
+    const auto clamp = [](float v) { return std::clamp(v, 0.0F, 255.0F); };
+    return {
+        clamp((m[0] * c[0]) + (m[1] * c[1]) + (m[2] * c[2])),
+        clamp((m[3] * c[0]) + (m[4] * c[1]) + (m[5] * c[2])),
+        clamp((m[6] * c[0]) + (m[7] * c[1]) + (m[8] * c[2])),
     };
 }
 
@@ -96,23 +139,25 @@ QPixmap mapPixels(const QImage &source, Transform &&transform)
 
 QPixmap renderCursed(const QImage &source)
 {
-    // CSS `grayscale(1) contrast(CURSED_CONTRAST)`
+    // CSS `grayscale(1) brightness(0.7) contrast(2.5)`
     return mapPixels(source, [](float r, float g, float b) {
         const float luma = (0.2126F * r) + (0.7152F * g) + (0.0722F * b);
-        const float v = ((luma - 127.5F) * CURSED_CONTRAST) + 127.5F;
+        const float bright = luma * CURSED_BRIGHTNESS;
+        const float v = ((bright - 127.5F) * CURSED_CONTRAST) + 127.5F;
         return std::array<float, 3>{v, v, v};
     });
 }
 
-QPixmap renderHueRotated(const QImage &source, double degrees)
+QPixmap renderPartyFrame(const QImage &source, double degrees)
 {
-    const auto m = hueRotateMatrix(degrees);
-    return mapPixels(source, [&m](float r, float g, float b) {
-        return std::array<float, 3>{
-            (m[0] * r) + (m[1] * g) + (m[2] * b),
-            (m[3] * r) + (m[4] * g) + (m[5] * b),
-            (m[6] * r) + (m[7] * g) + (m[8] * b),
-        };
+    // CSS `sepia(0.5) hue-rotate(<degrees>) saturate(2.5)`
+    const auto sepia = sepiaMatrix(PARTY_SEPIA);
+    const auto hue = hueRotateMatrix(degrees);
+    const auto saturate = saturateMatrix(PARTY_SATURATE);
+    return mapPixels(source, [&](float r, float g, float b) {
+        auto c = applyMatrix(sepia, {r, g, b});
+        c = applyMatrix(hue, c);
+        return applyMatrix(saturate, c);
     });
 }
 
@@ -158,7 +203,7 @@ QList<Frame> renderPartyFrames(const QList<Frame> &source)
         for (int i = 0; i < PARTY_STILL_FRAME_COUNT; i++)
         {
             out.append(Frame{
-                .image = renderHueRotated(images.first(),
+                .image = renderPartyFrame(images.first(),
                                           360.0 * i / PARTY_STILL_FRAME_COUNT),
                 .duration = PARTY_STILL_FRAME_DURATION_MS,
             });
@@ -195,7 +240,7 @@ QList<Frame> renderPartyFrames(const QList<Frame> &source)
         {
             const double hue = 360.0 * elapsedMs / cycleMs;
             out.append(Frame{
-                .image = renderHueRotated(images[i], hue),
+                .image = renderPartyFrame(images[i], hue),
                 .duration = source[i].duration,
             });
             elapsedMs += source[i].duration;
