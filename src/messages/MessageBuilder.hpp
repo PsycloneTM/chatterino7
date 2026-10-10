@@ -269,7 +269,13 @@ private:
         bool hasBits = false;
         bool bitsStacked = false;
         int bitsLeft = 0;
+        /// BTTV `z!` modifier words seen right before the current word. They
+        /// are only consumed if an emote follows, otherwise they're flushed
+        /// as normal text (see flushPendingModifiers).
+        QStringList pendingModifiers;
     };
+    /// Adds any buffered modifier words from `state` as normal text.
+    void flushPendingModifiers(TextState &state);
     void addEmoji(const EmotePtr &emote);
     void addTextOrEmote(TextState &state, QString string);
 
