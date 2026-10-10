@@ -166,8 +166,8 @@ public:
     void addWordFromUserMessage(QStringView string,
                                 ChannelChatters *chatters = nullptr);
 
-    /// @param wide Draw the emote twice as wide (BTTV's `w!` modifier)
-    void appendEmote(const EmotePtr &emote, bool wide = false,
+    void appendEmote(const EmotePtr &emote,
+                     const EmoteModifiers &modifiers = {},
                      bool trailingSpace = true);
 
     MessageColor textColor() const;
@@ -271,12 +271,21 @@ private:
         bool hasBits = false;
         bool bitsStacked = false;
         int bitsLeft = 0;
-        /// BTTV `w!` words seen right before the current word. They're only
-        /// consumed if an emote follows, otherwise they're flushed as text.
+        /// BTTV prefix modifier words (`w!`, `h!`, `v!`) seen right before the
+        /// current word and the modifiers they stand for. They're only
+        /// consumed if an emote follows, otherwise they're flushed as the
+        /// normal emotes.
         QStringList pendingModifiers;
+        EmoteModifiers pendingModifierFlags;
     };
-    /// Adds any buffered modifier words from `state` as normal text.
+    /// Adds any buffered modifier words from `state` as normal emotes/text.
     void flushPendingModifiers(TextState &state);
+    /// Clears the buffered modifier words and returns the modifiers they stood
+    /// for.
+    static EmoteModifiers takePendingModifiers(TextState &state);
+    /// Applies `modifiers` to the emote directly before the current word (FFZ
+    /// suffix modifiers). Returns false if there is no such emote.
+    bool applyToPreviousEmote(const EmoteModifiers &modifiers);
     void addEmoji(const EmotePtr &emote);
     void addTextOrEmote(TextState &state, QString string);
 
