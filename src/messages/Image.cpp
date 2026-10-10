@@ -741,13 +741,12 @@ void Image::loadEffect()
 
     // Render the effect once, off the GUI thread. The result replaces the
     // (empty) frames of this image, just like a downloaded image would.
-    QThreadPool::globalInstance()->start([weak = weakOf(this),
-                                          frames = std::move(frames),
-                                          effect = this->effect_,
-                                          scale = this->scale_]() mutable {
-        auto rendered = detail::renderImageEffect(frames, effect, scale);
-        detail::assignFrames(weak, std::move(rendered));
-    });
+    QThreadPool::globalInstance()->start(
+        [weak = weakOf(this), frames = std::move(frames),
+         effect = this->effect_, scale = this->scale_]() mutable {
+            auto rendered = detail::renderImageEffect(frames, effect, scale);
+            detail::assignFrames(weak, std::move(rendered));
+        });
 }
 
 void Image::actuallyLoad()
