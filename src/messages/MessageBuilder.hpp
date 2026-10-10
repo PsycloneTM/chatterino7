@@ -21,6 +21,7 @@
 
 #include <ctime>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace chatterino {
@@ -279,6 +280,10 @@ private:
         QStringList pendingModifiers;
         EmoteModifiers pendingModifierFlags;
         std::vector<EmotePtr> pendingModifierEmotes;
+        /// Index (in the message's elements) of the last emote that came from
+        /// Twitch's own `emotes` tag (not BTTV/FFZ/7TV). Used for Twitch's
+        /// "Gigantify an Emote" power-up, which only affects those.
+        std::optional<size_t> lastTwitchEmote;
     };
     /// Adds any buffered modifier words from `state` as normal emotes/text.
     void flushPendingModifiers(TextState &state);
