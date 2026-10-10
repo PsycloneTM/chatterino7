@@ -287,9 +287,14 @@ EmotePtr EmoteElement::getEmote() const
     return this->emote_;
 }
 
-void EmoteElement::setWide(bool wide)
+const EmoteModifiers &EmoteElement::modifiers() const
 {
-    this->wide_ = wide;
+    return this->modifiers_;
+}
+
+void EmoteElement::setModifiers(const EmoteModifiers &modifiers)
+{
+    this->modifiers_ = modifiers;
 }
 
 void EmoteElement::addToContainer(MessageLayoutContainer &container,
@@ -314,7 +319,7 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
             auto emoteScale = getSettings()->emoteScale.getValue();
 
             auto size = image->size() * container.getScale() * emoteScale;
-            if (this->wide_)
+            if (this->modifiers_.wide)
             {
                 size.setWidth(size.width() * 2);
             }
@@ -336,7 +341,9 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
 MessageLayoutElement *EmoteElement::makeImageLayoutElement(
     const ImagePtr &image, QSizeF size)
 {
-    return new ImageLayoutElement(*this, image, size);
+    auto *element = new ImageLayoutElement(*this, image, size);
+    element->setModifiers(this->modifiers_);
+    return element;
 }
 
 void EmoteElement::ensureText(bool asFallback)
@@ -361,9 +368,17 @@ QJsonObject EmoteElement::toJson() const
     auto base = MessageElement::toJson();
     base["type"_L1] = u"EmoteElement"_s;
     base["emote"_L1] = this->emote_->toJson();
-    if (this->wide_)
+    if (this->modifiers_.wide)
     {
         base["wide"_L1] = true;
+    }
+    if (this->modifiers_.flipHorizontal)
+    {
+        base["flipHorizontal"_L1] = true;
+    }
+    if (this->modifiers_.flipVertical)
+    {
+        base["flipVertical"_L1] = true;
     }
     if (this->textElement_)
     {
@@ -382,7 +397,7 @@ std::unique_ptr<MessageElement> EmoteElement::clone() const
 {
     auto elem = std::make_unique<EmoteElement>(this->emote_, this->getFlags(),
                                                this->textColor_);
-    elem->wide_ = this->wide_;
+    elem->modifiers_ = this->modifiers_;
     elem->cloneFrom(*this);
     return elem;
 }
