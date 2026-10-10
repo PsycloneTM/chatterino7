@@ -101,15 +101,30 @@ private:
 };
 
 /// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!` (applied to the next
-/// emote) and FFZ's `ffzW`, `ffzX`, `ffzY` (applied to the previous emote).
+/// emote), `l!`/`r!` (rotate the next emote left/right) and FFZ's `ffzW`, `ffzX`, `ffzY` (applied to the previous emote).
 struct EmoteModifiers {
     bool wide = false;
     bool flipHorizontal = false;
     bool flipVertical = false;
+    bool rotateLeft = false;
+    bool rotateRight = false;
 
     bool any() const
     {
-        return this->wide || this->flipHorizontal || this->flipVertical;
+        return this->wide || this->flipHorizontal || this->flipVertical ||
+               this->rotateLeft || this->rotateRight;
+    }
+
+    /// Net rotation in degrees (clockwise); opposite rotations cancel out
+    int rotationDegrees() const
+    {
+        return (this->rotateRight ? 90 : 0) - (this->rotateLeft ? 90 : 0);
+    }
+
+    /// True if the emote is rotated by a quarter turn (width/height swap)
+    bool isSideways() const
+    {
+        return this->rotationDegrees() != 0;
     }
 
     void merge(const EmoteModifiers &other)
@@ -117,6 +132,8 @@ struct EmoteModifiers {
         this->wide |= other.wide;
         this->flipHorizontal |= other.flipHorizontal;
         this->flipVertical |= other.flipVertical;
+        this->rotateLeft |= other.rotateLeft;
+        this->rotateRight |= other.rotateRight;
     }
 };
 
