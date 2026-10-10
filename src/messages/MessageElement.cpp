@@ -363,9 +363,10 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
 MessageLayoutElement *EmoteElement::makeImageLayoutElement(
     const ImagePtr &image, QSizeF size)
 {
-    // For `c!`, `p!` and `ffzCursed`: this is the (cached) image with the
-    // effect already rendered into it, nothing is filtered while painting.
-    auto effectImage = image->withEffect(this->modifiers_.colorEffect);
+    // For `c!`, `p!`, `s!` and `ffzCursed`: this is the (cached) image with
+    // the effect already rendered into it, nothing is filtered or moved while
+    // painting.
+    auto effectImage = image->withEffect(this->modifiers_.imageEffect());
 
     auto *element = new ImageLayoutElement(*this, effectImage, size);
     element->setModifiers(this->modifiers_);
@@ -421,6 +422,10 @@ QJsonObject EmoteElement::toJson() const
     if (this->modifiers_.colorEffect == ImageEffect::Party)
     {
         base["party"_L1] = true;
+    }
+    if (this->modifiers_.shake)
+    {
+        base["shake"_L1] = true;
     }
     if (this->textElement_)
     {
