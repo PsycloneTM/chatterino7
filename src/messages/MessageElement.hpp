@@ -564,7 +564,6 @@ public:
     /// Whether this emote was gigantified (Twitch's "Gigantify an Emote" bits
     /// power-up). Gigantified emotes are drawn `GIGANTIFIED_EMOTE_SCALE` times
     /// larger.
-    bool isGigantified() const;
     void setGigantified(bool gigantified);
 
     /// The emotes of the modifier words (e.g. `w!`, `ffzX`) applied to this
@@ -612,10 +611,6 @@ public:
 
     void addEmoteLayer(const Emote &emote);
 
-    /// See `EmoteElement::isGigantified`
-    bool isGigantified() const;
-    void setGigantified(bool gigantified);
-
     void addToContainer(MessageLayoutContainer &container,
                         const MessageLayoutContext &ctx) override;
 
@@ -644,7 +639,6 @@ private:
 
     std::unique_ptr<TextElement> textElement_;
     MessageColor textElementColor_;
-    bool gigantified_ = false;
 };
 
 class BadgeElement : public MessageElement
