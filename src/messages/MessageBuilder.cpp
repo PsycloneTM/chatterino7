@@ -551,6 +551,11 @@ std::optional<ModifierToken> parseModifierToken(QStringView word)
         return ModifierToken{.modifiers = {.colorEffect = ImageEffect::Party},
                              .appliesToNext = true};
     }
+    if (word == u"s!")
+    {
+        return ModifierToken{.modifiers = {.shake = true},
+                             .appliesToNext = true};
+    }
     if (word == u"ffzW")
     {
         return ModifierToken{.modifiers = {.wide = true},
