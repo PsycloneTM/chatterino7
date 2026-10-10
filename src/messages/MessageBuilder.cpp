@@ -541,6 +541,16 @@ std::optional<ModifierToken> parseModifierToken(QStringView word)
         return ModifierToken{.modifiers = {.rotateRight = true},
                              .appliesToNext = true};
     }
+    if (word == u"c!")
+    {
+        return ModifierToken{.modifiers = {.colorEffect = ImageEffect::Cursed},
+                             .appliesToNext = true};
+    }
+    if (word == u"p!")
+    {
+        return ModifierToken{.modifiers = {.colorEffect = ImageEffect::Party},
+                             .appliesToNext = true};
+    }
     if (word == u"ffzW")
     {
         return ModifierToken{.modifiers = {.wide = true},
@@ -554,6 +564,11 @@ std::optional<ModifierToken> parseModifierToken(QStringView word)
     if (word == u"ffzY")
     {
         return ModifierToken{.modifiers = {.flipVertical = true},
+                             .appliesToNext = false};
+    }
+    if (word == u"ffzCursed")
+    {
+        return ModifierToken{.modifiers = {.colorEffect = ImageEffect::Cursed},
                              .appliesToNext = false};
     }
     return std::nullopt;
