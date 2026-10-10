@@ -287,6 +287,11 @@ EmotePtr EmoteElement::getEmote() const
     return this->emote_;
 }
 
+void EmoteElement::setWide(bool wide)
+{
+    this->wide_ = wide;
+}
+
 void EmoteElement::addToContainer(MessageLayoutContainer &container,
                                   const MessageLayoutContext &ctx)
 {
@@ -309,6 +314,10 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
             auto emoteScale = getSettings()->emoteScale.getValue();
 
             auto size = image->size() * container.getScale() * emoteScale;
+            if (this->wide_)
+            {
+                size.setWidth(size.width() * 2);
+            }
 
             container.addElement(this->makeImageLayoutElement(image, size));
             return;
@@ -352,6 +361,10 @@ QJsonObject EmoteElement::toJson() const
     auto base = MessageElement::toJson();
     base["type"_L1] = u"EmoteElement"_s;
     base["emote"_L1] = this->emote_->toJson();
+    if (this->wide_)
+    {
+        base["wide"_L1] = true;
+    }
     if (this->textElement_)
     {
         base["text"_L1] = this->textElement_->toJson();
@@ -369,6 +382,7 @@ std::unique_ptr<MessageElement> EmoteElement::clone() const
 {
     auto elem = std::make_unique<EmoteElement>(this->emote_, this->getFlags(),
                                                this->textColor_);
+    elem->wide_ = this->wide_;
     elem->cloneFrom(*this);
     return elem;
 }
