@@ -88,9 +88,12 @@ ColorMatrix saturateMatrix(float s)
 
 /// Every CSS filter function clamps its result to [0, 255] (here), so
 /// chained matrices can't be multiplied together beforehand.
-std::array<float, 3> applyMatrix(const ColorMatrix &m, const std::array<float, 3> &c)
+std::array<float, 3> applyMatrix(const ColorMatrix &m,
+                                 const std::array<float, 3> &c)
 {
-    const auto clamp = [](float v) { return std::clamp(v, 0.0F, 255.0F); };
+    const auto clamp = [](float v) {
+        return std::clamp(v, 0.0F, 255.0F);
+    };
     return {
         clamp((m[0] * c[0]) + (m[1] * c[1]) + (m[2] * c[2])),
         clamp((m[3] * c[0]) + (m[4] * c[1]) + (m[5] * c[2])),
