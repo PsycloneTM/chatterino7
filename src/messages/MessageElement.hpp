@@ -6,6 +6,7 @@
 
 #include "common/FlagsEnum.hpp"
 #include "messages/ImageSet.hpp"
+#include "messages/layouts/MessageLayoutElement.hpp"
 #include "messages/Link.hpp"
 #include "messages/MessageColor.hpp"
 #include "providers/links/LinkInfo.hpp"
@@ -552,8 +553,8 @@ public:
                         const MessageLayoutContext &ctx) override;
     EmotePtr getEmote() const;
 
-    /// Draw the emote twice as wide (BTTV's `w!` modifier)
-    void setWide(bool wide);
+    const EmoteModifiers &modifiers() const;
+    void setModifiers(const EmoteModifiers &modifiers);
 
     QJsonObject toJson() const override;
     std::string_view type() const override;
@@ -569,7 +570,7 @@ private:
     std::unique_ptr<TextElement> textElement_;
     MessageColor textColor_;
     bool usingFallbackColor_ = false;
-    bool wide_ = false;
+    EmoteModifiers modifiers_;
 
     EmotePtr emote_;
 };
