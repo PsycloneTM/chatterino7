@@ -21,9 +21,18 @@ namespace chatterino::detail {
 /// - `Party`: Animated images get their hue shifted over their duration (the
 ///   loop is repeated if it's very short, so the cycle isn't a strobe). A
 ///   still image becomes a short pre-rendered hue cycle.
+/// - `Shake`: The image jumps around by a few (logical) pixels every 50ms.
+///   Still images become a short pre-rendered cycle, frames of animated
+///   images are split where the shake takes a new step.
+/// - `CursedShake`, `PartyShake`: The color effect first, then the shake.
+///
+/// `scale` is the scale of the image (logical pixels per pixel of a frame). It
+/// is used to move the shaking image by the same distance for every
+/// resolution.
 ///
 /// `source` is returned unchanged for `ImageEffect::None` or if a frame can't
 /// be processed. Doesn't need to run on the GUI thread.
-QList<Frame> renderImageEffect(const QList<Frame> &source, ImageEffect effect);
+QList<Frame> renderImageEffect(const QList<Frame> &source, ImageEffect effect,
+                               qreal scale);
 
 }  // namespace chatterino::detail
