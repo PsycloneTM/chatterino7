@@ -552,6 +552,9 @@ public:
                         const MessageLayoutContext &ctx) override;
     EmotePtr getEmote() const;
 
+    /// Draw the emote twice as wide (BTTV's `w!` modifier)
+    void setWide(bool wide);
+
     QJsonObject toJson() const override;
     std::string_view type() const override;
     std::unique_ptr<MessageElement> clone() const override;
@@ -566,6 +569,7 @@ private:
     std::unique_ptr<TextElement> textElement_;
     MessageColor textColor_;
     bool usingFallbackColor_ = false;
+    bool wide_ = false;
 
     EmotePtr emote_;
 };
