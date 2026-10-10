@@ -731,25 +731,21 @@ void tokenizeWordsWithEmoji(QStringView text,
             }});
 }
 
-/// Marks the emote element at `index` as gigantified (Twitch's "Gigantify an
-/// Emote" bits power-up). The element can be a layered emote if zero-width
-/// emotes were stacked onto it afterwards.
-void gigantifyEmoteAt(
-    const std::vector<std::unique_ptr<MessageElement>> &elements, size_t index)
+/// Twitch's "Gigantify an Emote" bits power-up sends a message that consists of
+/// a single Twitch emote. This marks that emote, looking only at the elements
+/// from `start` on.
+void gigantifyEmote(
+    const std::vector<std::unique_ptr<MessageElement>> &elements, size_t start)
 {
-    if (index >= elements.size())
+    for (size_t i = start; i < elements.size(); i++)
     {
-        return;
-    }
-
-    auto *element = elements[index].get();
-    if (auto *emote = dynamic_cast<EmoteElement *>(element))
-    {
-        emote->setGigantified(true);
-    }
-    else if (auto *layered = dynamic_cast<LayeredEmoteElement *>(element))
-    {
-        layered->setGigantified(true);
+        auto *emote = dynamic_cast<EmoteElement *>(elements[i].get());
+        if (emote != nullptr &&
+            emote->getFlags().has(MessageElementFlag::Emote))
+        {
+            emote->setGigantified(true);
+            return;
+        }
     }
 }
 
@@ -2037,13 +2033,12 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         }
 
         // Add the content.
+        const auto contentStart = builder->elements.size();
         builder.addWords(content, twitchSpecials, textState);
 
-        // Twitch only gigantifies the last of its own emotes in the message
-        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message" &&
-            textState.lastTwitchEmote)
+        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message")
         {
-            gigantifyEmoteAt(builder->elements, *textState.lastTwitchEmote);
+            gigantifyEmote(builder->elements, contentStart);
         }
 
         QString stylizedUsername =
@@ -3070,13 +3065,11 @@ void MessageBuilder::addWords(
                                       state.pendingModifierEmotes,
                                       tok.trailingSpace);
                     clearPendingModifiers(state);
-                    state.lastTwitchEmote = this->message().elements.size() - 1;
                     return;
                 }
                 this->emplace<EmoteElement>(
                         tok.emote, MessageElementFlag::Emote, this->textColor_)
                     ->setTrailingSpace(tok.trailingSpace);
-                state.lastTwitchEmote = this->message().elements.size() - 1;
             },
             [&](const TokenizedGif &gif) {
                 this->flushPendingModifiers(state);
