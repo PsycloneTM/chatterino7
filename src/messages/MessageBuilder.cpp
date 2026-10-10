@@ -557,6 +557,11 @@ std::optional<ModifierToken> parseModifierToken(QStringView word)
         return ModifierToken{.modifiers = {.shake = true},
                              .appliesToNext = true};
     }
+    if (word == u"z!")
+    {
+        return ModifierToken{.modifiers = {.zeroWidth = true},
+                             .appliesToNext = true};
+    }
     if (word == u"ffzW")
     {
         return ModifierToken{.modifiers = {.wide = true},
@@ -726,28 +731,25 @@ void tokenizeWordsWithEmoji(QStringView text,
             }});
 }
 
-/// Twitch's "Gigantify an Emote" bits power-up enlarges the last emote of a
-/// message. This marks that emote (only looking at elements from `start` on, so
-/// badges and the like are never touched). Emojis can't be gigantified.
-void gigantifyLastEmote(
-    const std::vector<std::unique_ptr<MessageElement>> &elements, size_t start)
+/// Marks the emote element at `index` as gigantified (Twitch's "Gigantify an
+/// Emote" bits power-up). The element can be a layered emote if zero-width
+/// emotes were stacked onto it afterwards.
+void gigantifyEmoteAt(
+    const std::vector<std::unique_ptr<MessageElement>> &elements, size_t index)
 {
-    for (size_t i = elements.size(); i > start; i--)
+    if (index >= elements.size())
     {
-        auto *element = elements[i - 1].get();
-        if (auto *emote = dynamic_cast<EmoteElement *>(element))
-        {
-            if (emote->getFlags().has(MessageElementFlag::Emote))
-            {
-                emote->setGigantified(true);
-                return;
-            }
-        }
-        else if (auto *layered = dynamic_cast<LayeredEmoteElement *>(element))
-        {
-            layered->setGigantified(true);
-            return;
-        }
+        return;
+    }
+
+    auto *element = elements[index].get();
+    if (auto *emote = dynamic_cast<EmoteElement *>(element))
+    {
+        emote->setGigantified(true);
+    }
+    else if (auto *layered = dynamic_cast<LayeredEmoteElement *>(element))
+    {
+        layered->setGigantified(true);
     }
 }
 
@@ -2035,12 +2037,13 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         }
 
         // Add the content.
-        const auto contentStart = builder->elements.size();
         builder.addWords(content, twitchSpecials, textState);
 
-        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message")
+        // Twitch only gigantifies the last of its own emotes in the message
+        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message" &&
+            textState.lastTwitchEmote)
         {
-            gigantifyLastEmote(builder->elements, contentStart);
+            gigantifyEmoteAt(builder->elements, *textState.lastTwitchEmote);
         }
 
         QString stylizedUsername =
@@ -3000,8 +3003,9 @@ void MessageBuilder::appendEmote(const EmotePtr &emote,
                                  const std::vector<EmotePtr> &modifierEmotes,
                                  bool trailingSpace)
 {
-    if (emote->zeroWidth && getSettings()->enableZeroWidthEmotes &&
-        !this->isEmpty())
+    // Emotes are layered if they're zero-width themselves or `z!` was used
+    if ((emote->zeroWidth || modifiers.zeroWidth) &&
+        getSettings()->enableZeroWidthEmotes && !this->isEmpty())
     {
         // Attempt to merge current zero-width emote into any previous emotes
         auto *asEmote = dynamic_cast<EmoteElement *>(&this->back());
@@ -3066,11 +3070,13 @@ void MessageBuilder::addWords(
                                       state.pendingModifierEmotes,
                                       tok.trailingSpace);
                     clearPendingModifiers(state);
+                    state.lastTwitchEmote = this->message().elements.size() - 1;
                     return;
                 }
                 this->emplace<EmoteElement>(
                         tok.emote, MessageElementFlag::Emote, this->textColor_)
                     ->setTrailingSpace(tok.trailingSpace);
+                state.lastTwitchEmote = this->message().elements.size() - 1;
             },
             [&](const TokenizedGif &gif) {
                 this->flushPendingModifiers(state);
