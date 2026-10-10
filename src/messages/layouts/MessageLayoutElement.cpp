@@ -199,7 +199,7 @@ void drawModifiedPixmap(QPainter &painter, const QRectF &rect,
                   modifiers.flipVertical ? -1.0 : 1.0);
     painter.drawPixmap(QRectF(-size.width() / 2, -size.height() / 2,
                               size.width(), size.height()),
-                        pixmap, QRectF());
+                       pixmap, QRectF());
     painter.restore();
 }
 
