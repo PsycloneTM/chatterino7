@@ -518,7 +518,8 @@ std::optional<ModifierToken> parseModifierToken(QStringView word)
 {
     if (word == u"w!")
     {
-        return ModifierToken{.modifiers = {.wide = true}, .appliesToNext = true};
+        return ModifierToken{.modifiers = {.wide = true},
+                             .appliesToNext = true};
     }
     if (word == u"h!")
     {
