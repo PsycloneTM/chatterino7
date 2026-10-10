@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <numbers>
 
 namespace {
@@ -32,6 +33,30 @@ constexpr float PARTY_SATURATE = 2.5F;
 /// timer's 20ms step.
 constexpr int PARTY_STILL_FRAME_COUNT = 25;
 constexpr int PARTY_STILL_FRAME_DURATION_MS = 60;
+
+/// `s!` is BTTV's CSS animation `bttv-emote-modifier-shake`: a `translate` (in
+/// CSS pixels) that jumps to the next of 10 positions every 50ms. It uses
+/// `step-start`, so each step shows the value of its *end* keyframe (10% to
+/// 100%) and the 0% keyframe is never visible.
+struct ShakeOffset {
+    int x;
+    int y;
+};
+constexpr std::array<ShakeOffset, 10> SHAKE_OFFSETS{{
+    {2, 0},
+    {1, -2},
+    {-2, 1},
+    {0, -1},
+    {2, 2},
+    {-1, -1},
+    {-2, 2},
+    {2, 1},
+    {-1, -2},
+    {1, 0},
+}};
+constexpr int SHAKE_STEP_MS = 50;
+/// Upper bound for the memory the frames of a shaking image may take
+constexpr qint64 SHAKE_MAX_BYTES = chatterino::Image::maxBytesRam / 2;
 
 /// An animated image is repeated until it's at least this long (BTTV's cycle
 /// length), so the hue doesn't cycle faster than it's pleasant for short
@@ -164,6 +189,37 @@ QPixmap renderPartyFrame(const QImage &source, double degrees)
     });
 }
 
+/// `source` moved by (`dx`, `dy`) pixels. The part that moves in from outside
+/// is transparent, the part that moves out is cut off.
+QPixmap renderShifted(const QImage &source, int dx, int dy)
+{
+    QImage out(source.size(), QImage::Format_ARGB32);
+    out.fill(Qt::transparent);
+
+    const int copyWidth = source.width() - std::abs(dx);
+    if (copyWidth > 0)
+    {
+        const int srcX = std::max(0, -dx);
+        const int dstX = std::max(0, dx);
+
+        for (int y = 0; y < source.height(); y++)
+        {
+            const int srcY = y - dy;
+            if (srcY < 0 || srcY >= source.height())
+            {
+                continue;
+            }
+
+            const auto *in =
+                reinterpret_cast<const QRgb *>(source.constScanLine(srcY));
+            auto *dst = reinterpret_cast<QRgb *>(out.scanLine(y));
+            std::copy_n(in + srcX, copyWidth, dst + dstX);
+        }
+    }
+
+    return QPixmap::fromImage(std::move(out));
+}
+
 QList<Frame> renderCursedFrames(const QList<Frame> &source)
 {
     QList<Frame> out;
@@ -253,11 +309,97 @@ QList<Frame> renderPartyFrames(const QList<Frame> &source)
     return out;
 }
 
+QList<Frame> renderShakeFrames(const QList<Frame> &source, qreal scale)
+{
+    QList<QImage> images;
+    images.reserve(source.size());
+    for (const auto &frame : source)
+    {
+        images.append(toStraightImage(frame.image));
+        if (images.last().isNull())
+        {
+            return source;
+        }
+    }
+
+    // The offsets are in logical pixels, convert them to pixels of a frame.
+    const double pixelsPerLogicalPixel = scale > 0.0 ? 1.0 / scale : 1.0;
+    const auto toPixels = [&](int logical) {
+        return static_cast<int>(std::lround(logical * pixelsPerLogicalPixel));
+    };
+    const auto render = [&](const QImage &image, qint64 timeMs) {
+        const auto step = static_cast<std::size_t>(timeMs / SHAKE_STEP_MS) %
+                          SHAKE_OFFSETS.size();
+        const auto &offset = SHAKE_OFFSETS[step];
+        return renderShifted(image, toPixels(offset.x), toPixels(offset.y));
+    };
+
+    QList<Frame> out;
+
+    if (source.size() == 1)
+    {
+        // Still image: pre-render one full cycle
+        out.reserve(static_cast<qsizetype>(SHAKE_OFFSETS.size()));
+        for (std::size_t i = 0; i < SHAKE_OFFSETS.size(); i++)
+        {
+            out.append(Frame{
+                .image = render(images.first(),
+                                static_cast<qint64>(i) * SHAKE_STEP_MS),
+                .duration = SHAKE_STEP_MS,
+            });
+        }
+        return out;
+    }
+
+    // A frame that's longer than one step is split, so the shake doesn't get
+    // slower for slow animations. Shorter frames use the step of their start.
+    qint64 pieceCount = 0;
+    qint64 timeMs = 0;
+    for (const auto &frame : source)
+    {
+        const qint64 duration = std::max(frame.duration, 1);
+        pieceCount += ((timeMs + duration - 1) / SHAKE_STEP_MS) -
+                      (timeMs / SHAKE_STEP_MS) + 1;
+        timeMs += duration;
+    }
+    const bool split =
+        static_cast<qint64>(images.first().sizeInBytes()) * pieceCount <=
+        SHAKE_MAX_BYTES;
+
+    timeMs = 0;
+    out.reserve(static_cast<qsizetype>(split ? pieceCount : source.size()));
+    for (qsizetype i = 0; i < source.size(); i++)
+    {
+        const qint64 duration = std::max(source[i].duration, 1);
+
+        qint64 remaining = duration;
+        qint64 pieceStart = timeMs;
+        while (remaining > 0)
+        {
+            const qint64 untilNextStep =
+                SHAKE_STEP_MS - (pieceStart % SHAKE_STEP_MS);
+            const qint64 length =
+                split ? std::min(remaining, untilNextStep) : remaining;
+
+            out.append(Frame{
+                .image = render(images[i], pieceStart),
+                .duration = static_cast<int>(length),
+            });
+            pieceStart += length;
+            remaining -= length;
+        }
+        timeMs += duration;
+    }
+
+    return out;
+}
+
 }  // namespace
 
 namespace chatterino::detail {
 
-QList<Frame> renderImageEffect(const QList<Frame> &source, ImageEffect effect)
+QList<Frame> renderImageEffect(const QList<Frame> &source, ImageEffect effect,
+                               qreal scale)
 {
     if (source.isEmpty())
     {
@@ -270,6 +412,12 @@ QList<Frame> renderImageEffect(const QList<Frame> &source, ImageEffect effect)
             return renderCursedFrames(source);
         case ImageEffect::Party:
             return renderPartyFrames(source);
+        case ImageEffect::Shake:
+            return renderShakeFrames(source, scale);
+        case ImageEffect::CursedShake:
+            return renderShakeFrames(renderCursedFrames(source), scale);
+        case ImageEffect::PartyShake:
+            return renderShakeFrames(renderPartyFrames(source), scale);
         case ImageEffect::None:
             break;
     }
