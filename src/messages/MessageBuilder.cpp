@@ -65,6 +65,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <unordered_set>
 
 using namespace chatterino::literals;
@@ -652,6 +653,24 @@ void tokenizeWordsWithEmoji(QStringView text,
             [&](const TokenizedGif &gif) {
                 visitor(gif);
             }});
+}
+
+/// Twitch's "Gigantify an Emote" bits power-up sends a message that consists of
+/// a single Twitch emote. This marks that emote, looking only at the elements
+/// from `start` on.
+void gigantifyEmote(
+    const std::vector<std::unique_ptr<MessageElement>> &elements, size_t start)
+{
+    for (size_t i = start; i < elements.size(); i++)
+    {
+        auto *emote = dynamic_cast<EmoteElement *>(elements[i].get());
+        if (emote != nullptr &&
+            emote->getFlags().has(MessageElementFlag::Emote))
+        {
+            emote->setGigantified(true);
+            return;
+        }
+    }
 }
 
 }  // namespace
@@ -1938,7 +1957,13 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         }
 
         // Add the content.
+        const auto contentStart = builder->elements.size();
         builder.addWords(content, twitchSpecials, textState);
+
+        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message")
+        {
+            gigantifyEmote(builder->elements, contentStart);
+        }
 
         QString stylizedUsername =
             stylizeUsername(builder->loginName, builder.message());
