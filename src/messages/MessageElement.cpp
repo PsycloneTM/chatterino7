@@ -297,8 +297,11 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
 
     if (ctx.flags.has(MessageElementFlag::EmoteImage))
     {
-        auto image =
-            this->emote_->images.getImageOrLoaded(container.getImageScale());
+        // Gigantified emotes need a higher resolution image, so ask for one
+        const float gigantifyScale =
+            this->gigantified_ ? GIGANTIFIED_EMOTE_SCALE : 1.F;
+        auto image = this->emote_->images.getImageOrLoaded(
+            container.getImageScale() * gigantifyScale);
 
         if (image->isEmpty())
         {
@@ -308,7 +311,8 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
         {
             auto emoteScale = getSettings()->emoteScale.getValue();
 
-            auto size = image->size() * container.getScale() * emoteScale;
+            auto size = image->size() * container.getScale() * emoteScale *
+                        gigantifyScale;
 
             container.addElement(this->makeImageLayoutElement(image, size));
             return;
@@ -322,6 +326,11 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
     auto textCtx = ctx;
     textCtx.flags = MessageElementFlag::Misc;
     this->textElement_->addToContainer(container, textCtx);
+}
+
+void EmoteElement::setGigantified(bool gigantified)
+{
+    this->gigantified_ = gigantified;
 }
 
 MessageLayoutElement *EmoteElement::makeImageLayoutElement(
@@ -352,6 +361,10 @@ QJsonObject EmoteElement::toJson() const
     auto base = MessageElement::toJson();
     base["type"_L1] = u"EmoteElement"_s;
     base["emote"_L1] = this->emote_->toJson();
+    if (this->gigantified_)
+    {
+        base["gigantified"_L1] = true;
+    }
     if (this->textElement_)
     {
         base["text"_L1] = this->textElement_->toJson();
@@ -369,6 +382,7 @@ std::unique_ptr<MessageElement> EmoteElement::clone() const
 {
     auto elem = std::make_unique<EmoteElement>(this->emote_, this->getFlags(),
                                                this->textColor_);
+    elem->gigantified_ = this->gigantified_;
     elem->cloneFrom(*this);
     return elem;
 }
