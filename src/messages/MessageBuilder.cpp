@@ -559,7 +559,7 @@ std::optional<ModifierToken> parseModifierToken(QStringView word)
     }
     if (word == u"z!")
     {
-        return ModifierToken{.modifiers = {.zeroWidth = true},
+        return ModifierToken{.modifiers = {.noSpace = true},
                              .appliesToNext = true};
     }
     if (word == u"ffzW")
@@ -2998,9 +2998,8 @@ void MessageBuilder::appendEmote(const EmotePtr &emote,
                                  const std::vector<EmotePtr> &modifierEmotes,
                                  bool trailingSpace)
 {
-    // Emotes are layered if they're zero-width themselves or `z!` was used
-    if ((emote->zeroWidth || modifiers.zeroWidth) &&
-        getSettings()->enableZeroWidthEmotes && !this->isEmpty())
+    if (emote->zeroWidth && getSettings()->enableZeroWidthEmotes &&
+        !this->isEmpty())
     {
         // Attempt to merge current zero-width emote into any previous emotes
         auto *asEmote = dynamic_cast<EmoteElement *>(&this->back());
@@ -3031,6 +3030,13 @@ void MessageBuilder::appendEmote(const EmotePtr &emote,
         }
 
         // No emote to merge with, just show as regular emote
+    }
+
+    // `z!`: no space between this emote and the previous one
+    if (modifiers.noSpace && !this->isEmpty() &&
+        this->back().getFlags().has(MessageElementFlag::Emote))
+    {
+        this->back().setTrailingSpace(false);
     }
 
     auto *element = this->emplace<EmoteElement>(
