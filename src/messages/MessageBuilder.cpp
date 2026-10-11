@@ -556,6 +556,11 @@ std::optional<ModifierToken> parseModifierToken(QStringView word)
         return ModifierToken{.modifiers = {.shake = true},
                              .appliesToNext = true};
     }
+    if (word == u"z!")
+    {
+        return ModifierToken{.modifiers = {.noSpace = true},
+                             .appliesToNext = true};
+    }
     if (word == u"ffzW")
     {
         return ModifierToken{.modifiers = {.wide = true},
@@ -3000,6 +3005,13 @@ void MessageBuilder::appendEmote(const EmotePtr &emote,
         }
 
         // No emote to merge with, just show as regular emote
+    }
+
+    // `z!`: no space between this emote and the previous one
+    if (modifiers.noSpace && !this->isEmpty() &&
+        this->back().getFlags().has(MessageElementFlag::Emote))
+    {
+        this->back().setTrailingSpace(false);
     }
 
     auto *element = this->emplace<EmoteElement>(
