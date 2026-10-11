@@ -427,6 +427,10 @@ QJsonObject EmoteElement::toJson() const
     {
         base["shake"_L1] = true;
     }
+    if (this->modifiers_.noSpace)
+    {
+        base["noSpace"_L1] = true;
+    }
     if (this->textElement_)
     {
         base["text"_L1] = this->textElement_->toJson();
