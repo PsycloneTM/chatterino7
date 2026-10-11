@@ -436,9 +436,9 @@ QJsonObject EmoteElement::toJson() const
     {
         base["shake"_L1] = true;
     }
-    if (this->modifiers_.zeroWidth)
+    if (this->modifiers_.noSpace)
     {
-        base["zeroWidth"_L1] = true;
+        base["noSpace"_L1] = true;
     }
     if (this->gigantified_)
     {
