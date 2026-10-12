@@ -553,6 +553,12 @@ qreal MessageLayoutContainer::getWidth() const
     return this->width_;
 }
 
+qreal MessageLayoutContainer::maxLineWidth() const
+{
+    return this->width_ - int(MARGIN.left() * this->scale_) -
+           int(MARGIN.right() * this->scale_);
+}
+
 qreal MessageLayoutContainer::getHeight() const
 {
     return this->height_;

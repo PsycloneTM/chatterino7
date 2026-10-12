@@ -148,6 +148,11 @@ struct MessageLayoutContainer {
     qreal getWidth() const;
 
     /**
+     * Returns the width of a full line, excluding the margins
+     */
+    qreal maxLineWidth() const;
+
+    /**
      * Returns the height of this message
      */
     qreal getHeight() const;

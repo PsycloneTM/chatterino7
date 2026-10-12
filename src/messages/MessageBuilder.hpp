@@ -269,6 +269,8 @@ private:
         bool hasBits = false;
         bool bitsStacked = false;
         int bitsLeft = 0;
+        /// The next Twitch emote (from the `emotes` tag) should be gigantified
+        bool gigantifyTwitchEmote = false;
     };
     void addEmoji(const EmotePtr &emote);
     void addTextOrEmote(TextState &state, QString string);

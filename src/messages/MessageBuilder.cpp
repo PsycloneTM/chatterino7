@@ -1937,6 +1937,10 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
             builder->flags.set(MessageFlag::AsciiArt);
         }
 
+        // Twitch's "Gigantify an Emote" bits power-up
+        textState.gigantifyTwitchEmote =
+            tags.getOrEmpty("msg-id") == "gigantified-emote-message";
+
         // Add the content.
         builder.addWords(content, twitchSpecials, textState);
 
@@ -2865,9 +2869,18 @@ void MessageBuilder::addWords(
                 this->addEmoji(tok.emote);
             },
             [&](const TokenizedEmote &tok) {
-                this->emplace<EmoteElement>(
-                        tok.emote, MessageElementFlag::Emote, this->textColor_)
-                    ->setTrailingSpace(tok.trailingSpace);
+                auto *element = this->emplace<EmoteElement>(
+                    tok.emote, MessageElementFlag::Emote, this->textColor_);
+                element->setTrailingSpace(tok.trailingSpace);
+
+                if (state.gigantifyTwitchEmote)
+                {
+                    // Only the first Twitch emote is gigantified. Third-party
+                    // emotes (7TV, BTTV, FFZ) are never tokenized as
+                    // `TokenizedEmote`, so they can't be picked by mistake.
+                    element->setGigantified(true);
+                    state.gigantifyTwitchEmote = false;
+                }
             },
             [&](const TokenizedGif &gif) {
                 this->addTwitchGif(gif.id, gif.originalText);

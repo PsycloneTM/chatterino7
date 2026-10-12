@@ -537,6 +537,11 @@ private:
     QString userLoginName_;
 };
 
+/// Scale factor applied to emotes gigantified through Twitch's "Gigantify an
+/// Emote" bits power-up. Twitch's largest emote asset (3.0) is 4x the size of
+/// the base (1.0) one.
+inline constexpr float GIGANTIFIED_EMOTE_SCALE = 4.F;
+
 // contains emote data and will pick the emote based on :
 //   a) are images for the emote type enabled
 //   b) which size it wants
@@ -552,6 +557,11 @@ public:
                         const MessageLayoutContext &ctx) override;
     EmotePtr getEmote() const;
 
+    /// Whether this emote was gigantified (Twitch's "Gigantify an Emote" bits
+    /// power-up). Gigantified emotes are drawn `GIGANTIFIED_EMOTE_SCALE` times
+    /// larger.
+    void setGigantified(bool gigantified);
+
     QJsonObject toJson() const override;
     std::string_view type() const override;
     std::unique_ptr<MessageElement> clone() const override;
@@ -566,6 +576,7 @@ private:
     std::unique_ptr<TextElement> textElement_;
     MessageColor textColor_;
     bool usingFallbackColor_ = false;
+    bool gigantified_ = false;
 
     EmotePtr emote_;
 };
