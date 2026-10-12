@@ -27,6 +27,7 @@
 #include "util/Helpers.hpp"
 #include "util/LayoutHelper.hpp"
 #include "util/MultiChannel.hpp"
+#include "util/PopupMenu.hpp"
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
@@ -1229,7 +1230,8 @@ void SplitHeader::mousePressEvent(QMouseEvent *event)
         case Qt::RightButton: {
             auto *menu = this->createMainMenu().release();
             menu->setAttribute(Qt::WA_DeleteOnClose);
-            menu->popup(this->mapToGlobal(event->pos() + QPoint(0, 4)));
+            popupMenuOnScreen(menu, 
+                              this->mapToGlobal(event->pos() + QPoint(0, 4)));
         }
         break;
 

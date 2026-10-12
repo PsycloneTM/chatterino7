@@ -628,6 +628,7 @@ set(SOURCE_FILES
         util/FormatTime.hpp
         util/FunctionEventFilter.cpp
         util/FunctionEventFilter.hpp
+        util/PopupMenu.hpp
         util/FuzzyConvert.cpp
         util/FuzzyConvert.hpp
         util/Helpers.cpp

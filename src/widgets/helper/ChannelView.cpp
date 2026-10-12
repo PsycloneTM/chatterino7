@@ -40,6 +40,7 @@
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
 #include "util/MultiChannel.hpp"
+#include "util/PopupMenu.hpp"
 #include "util/QMagicEnum.hpp"
 #include "util/Twitch.hpp"
 #include "widgets/buttons/LabelButton.hpp"
@@ -2820,7 +2821,7 @@ void ChannelView::addContextMenuItems(
     getApp()->getWindows()->channelViewContextMenuRequested.invoke(
         *this, *layout, hoveredElement, *menu);
 
-    menu->popup(QCursor::pos());
+    popupMenuOnScreen(menu, QCursor::pos());
     menu->raise();
 }
 

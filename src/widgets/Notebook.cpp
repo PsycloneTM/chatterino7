@@ -15,6 +15,7 @@
 #include "singletons/StreamerMode.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/PopupMenu.hpp"
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/InitUpdateButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
@@ -1243,8 +1244,8 @@ void Notebook::mousePressEvent(QMouseEvent *event)
                 this->menu_ = new QMenu(this);
                 this->addNotebookActionsToMenu(this->menu_);
             }
-            this->menu_->popup(event->globalPosition().toPoint() +
-                               QPoint(0, 8));
+            popupMenuOnScreen(this->menu_, 
+                              event->globalPosition().toPoint() + QPoint(0, 8));
         }
         break;
         default:;

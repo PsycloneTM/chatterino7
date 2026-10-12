@@ -15,6 +15,7 @@
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/Helpers.hpp"
+#include "util/PopupMenu.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/Notebook.hpp"
 #include "widgets/splits/DraggedSplit.hpp"
@@ -1121,8 +1122,9 @@ void NotebookTab::mousePressEvent(QMouseEvent *event)
         switch (event->button())
         {
             case Qt::RightButton: {
-                this->menu_.popup(event->globalPosition().toPoint() +
-                                  QPoint(0, 8));
+                popupMenuOnScreen(
+                    &this->menu_, 
+                    event->globalPosition().toPoint() + QPoint(0, 8));
 
                 const int visibleTabCount =
                     this->notebook_->getVisibleTabCount();

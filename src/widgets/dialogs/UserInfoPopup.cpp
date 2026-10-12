@@ -35,6 +35,7 @@
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
+#include "util/PopupMenu.hpp"
 #include "util/PostToThread.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
@@ -383,7 +384,7 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
 
                         this->appendCommonProfileActions(menu);
 
-                        menu->popup(QCursor::pos());
+                        popupMenuOnScreen(menu, QCursor::pos());
                         menu->raise();
                     }
                     break;
@@ -1746,7 +1747,7 @@ void UserInfoPopup::onKickProfilePictureClick(Qt::MouseButton button)
 
             this->appendCommonProfileActions(menu);
 
-            menu->popup(QCursor::pos());
+            popupMenuOnScreen(menu, QCursor::pos());
             menu->raise();
         }
         break;

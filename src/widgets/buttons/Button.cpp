@@ -6,6 +6,7 @@
 
 #include "singletons/Theme.hpp"
 #include "util/FunctionEventFilter.hpp"
+#include "util/PopupMenu.hpp"
 
 #include <QApplication>
 #include <QDebug>
@@ -364,7 +365,7 @@ void Button::showMenu()
         point.setY(point.y() - menuSizeHint.height() - this->height());
     }
 
-    this->menu_->popup(point);
+    popupMenuOnScreen(this->menu_.get(), point);
     this->menuVisible_ = true;
 }
 
