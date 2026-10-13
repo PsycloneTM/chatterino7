@@ -258,6 +258,12 @@ public:
         "/appearance/growWrappedNotebookLines",
         false,
     };
+    // When enabled, the tabs are hidden until the mouse is moved over the
+    // (otherwise empty) tab area, where they're shown on top of the page.
+    BoolSetting showTabsOnHover = {
+        "/appearance/showTabsOnHover",
+        false,
+    };
 
     //    BoolSetting collapseLongMessages =
     //    {"/appearance/messages/collapseLongMessages", false};
