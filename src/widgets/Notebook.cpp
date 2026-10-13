@@ -47,56 +47,6 @@
 
 namespace chatterino {
 
-/// Background drawn behind the tabs while they're revealed on top of the page
-/// in "show tabs on hover" mode.
-class NotebookHoverBackdrop : public BaseWidget
-{
-public:
-    explicit NotebookHoverBackdrop(QWidget *parent)
-        : BaseWidget(parent)
-    {
-    }
-
-    void setTabLocation(NotebookTabLocation location)
-    {
-        if (this->location_ != location)
-        {
-            this->location_ = location;
-            this->update();
-        }
-    }
-
-protected:
-    void paintEvent(QPaintEvent * /*event*/) override
-    {
-        QPainter painter(this);
-        painter.fillRect(this->rect(), this->theme->window.background);
-
-        // divider on the side facing the page
-        const auto line = int(2 * this->scale());
-        QRect divider;
-        switch (this->location_)
-        {
-            case NotebookTabLocation::Top:
-                divider = {0, this->height() - line, this->width(), line};
-                break;
-            case NotebookTabLocation::Bottom:
-                divider = {0, 0, this->width(), line};
-                break;
-            case NotebookTabLocation::Left:
-                divider = {this->width() - line, 0, line, this->height()};
-                break;
-            case NotebookTabLocation::Right:
-                divider = {0, 0, line, this->height()};
-                break;
-        }
-        painter.fillRect(divider, this->theme->tabs.dividerLine);
-    }
-
-private:
-    NotebookTabLocation location_ = NotebookTabLocation::Top;
-};
-
 Notebook::Notebook(QWidget *parent)
     : BaseWidget(parent)
     , addButton_(new DrawnButton(DrawnButton::Symbol::Plus,
@@ -111,8 +61,6 @@ Notebook::Notebook(QWidget *parent)
 
     // Used by the "show tabs on hover" mode
     this->setMouseTracking(true);
-    this->hoverBackdrop_ = new NotebookHoverBackdrop(this);
-    this->hoverBackdrop_->hide();
     this->hoverTimer_.setInterval(100);
     QObject::connect(&this->hoverTimer_, &QTimer::timeout, this, [this] {
         this->checkHoverState();
@@ -1040,13 +988,12 @@ void Notebook::performLayout(bool animated)
     const auto tabHeight = int(NOTEBOOK_TAB_HEIGHT * scale);
     const auto spacing = static_cast<int>(2 * this->scale());
 
-    // In "show tabs on hover" mode, the page is laid out as if the tabs were
-    // hidden. If the tabs are currently revealed, they're placed on top of the
-    // page afterwards (see below), so the page doesn't move when hovering.
+    // In "show tabs on hover" mode, the tabs only take up space while they're
+    // revealed. While hidden, only the usual thin strip is reserved.
     const bool hoverMode = this->isHoverMode();
     const bool revealed = hoverMode && this->hoverRevealed_;
 
-    LayoutContext ctx{
+    const LayoutContext ctx{
         .left = spacing,
         .right = this->width() - spacing,
         .bottom = this->height(),
@@ -1058,88 +1005,54 @@ void Notebook::performLayout(bool animated)
         .tabSpacer = std::max(1, static_cast<int>(scale)),
         .buttonWidth = tabHeight,
         .buttonHeight = tabHeight - 1,
-        .showTabs = this->showTabs_ && !hoverMode,
+        .showTabs = this->showTabs_ && (!hoverMode || revealed),
         .items = filteredItems,
     };
 
-    const auto doLayout = [&](const LayoutContext &layoutCtx) {
-        if (this->tabLocation_ == NotebookTabLocation::Top ||
-            this->tabLocation_ == NotebookTabLocation::Bottom)
-        {
-            this->performHorizontalLayout(layoutCtx, animated);
-        }
-        else
-        {
-            this->performVerticalLayout(layoutCtx, animated);
-        }
-    };
-
-    // The area that's taken up by tabs, as computed from the last layout
-    const auto tabAreaRect = [&] {
-        switch (this->tabLocation_)
-        {
-            case NotebookTabLocation::Top:
-                return QRect(0, 0, this->width(), this->lineOffset_ + spacing);
-            case NotebookTabLocation::Bottom:
-                return QRect(0, this->lineOffset_, this->width(),
-                             this->height() - this->lineOffset_);
-            case NotebookTabLocation::Left:
-                return QRect(0, 0, this->lineOffset_ + spacing,
-                             this->height());
-            case NotebookTabLocation::Right:
-                return QRect(this->lineOffset_, 0,
-                             this->width() - this->lineOffset_,
-                             this->height());
-        }
-        return QRect();
-    };
-
-    doLayout(ctx);
-
-    if (hoverMode)
+    if (this->tabLocation_ == NotebookTabLocation::Top ||
+        this->tabLocation_ == NotebookTabLocation::Bottom)
     {
-        // This is the area reserved while the tabs are hidden. Hovering it
-        // reveals the tabs.
-        this->hoverTriggerRect_ = tabAreaRect();
-    }
-
-    if (revealed)
-    {
-        const auto pageGeometry = this->selectedPage_ != nullptr
-                                      ? this->selectedPage_->geometry()
-                                      : QRect();
-        const auto lineOffset = this->lineOffset_;
-
-        ctx.showTabs = true;
-        doLayout(ctx);
-
-        this->hoverRevealRect_ = tabAreaRect();
-
-        // The tabs overlay the page, they don't push it away
-        if (this->selectedPage_ != nullptr)
-        {
-            this->selectedPage_->setGeometry(pageGeometry);
-        }
-        if (this->lineOffset_ != lineOffset)
-        {
-            this->lineOffset_ = lineOffset;
-            this->update();
-        }
-
-        this->hoverBackdrop_->setTabLocation(this->tabLocation_);
-        this->hoverBackdrop_->setGeometry(this->hoverRevealRect_);
-        this->hoverBackdrop_->show();
-        this->hoverBackdrop_->raise();
-
-        for (auto *btn : this->customButtons_)
-        {
-            btn->raise();
-        }
+        this->performHorizontalLayout(ctx, animated);
     }
     else
     {
-        this->hoverRevealRect_ = {};
-        this->hoverBackdrop_->hide();
+        this->performVerticalLayout(ctx, animated);
+    }
+
+    if (hoverMode)
+    {
+        // The area taken up by tabs (or reserved for them while hidden),
+        // based on the layout that was just performed.
+        QRect area;
+        switch (this->tabLocation_)
+        {
+            case NotebookTabLocation::Top:
+                area = {0, 0, this->width(), this->lineOffset_ + spacing};
+                break;
+            case NotebookTabLocation::Bottom:
+                area = {0, this->lineOffset_, this->width(),
+                        this->height() - this->lineOffset_};
+                break;
+            case NotebookTabLocation::Left:
+                area = {0, 0, this->lineOffset_ + spacing, this->height()};
+                break;
+            case NotebookTabLocation::Right:
+                area = {this->lineOffset_, 0,
+                        this->width() - this->lineOffset_, this->height()};
+                break;
+        }
+
+        if (revealed)
+        {
+            // Hovering the revealed tab area keeps the tabs open
+            this->hoverRevealRect_ = area;
+        }
+        else
+        {
+            // Hovering the reserved strip reveals the tabs
+            this->hoverTriggerRect_ = area;
+            this->hoverRevealRect_ = {};
+        }
     }
 
     if (ctx.showTabs)

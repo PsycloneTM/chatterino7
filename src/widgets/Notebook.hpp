@@ -30,7 +30,6 @@ class DrawnButton;
 class NotebookTab;
 class SplitContainer;
 class Split;
-class NotebookHoverBackdrop;
 
 using TabVisibilityFilter = std::function<bool(const NotebookTab *)>;
 
@@ -149,8 +148,8 @@ protected:
      * @brief Hide the tabs until the mouse is moved over the tab area
      *
      * While the tabs are hidden, only a thin strip (where the tabs would
-     * normally be) is reserved. Hovering that strip shows the tabs on top of
-     * the selected page, without moving the page.
+     * normally be) is reserved. Hovering that strip shows the tabs, which
+     * then take up space like usual (so they never cover the split headers).
      **/
     void setShowTabsOnHover(bool value);
 
@@ -284,12 +283,11 @@ private:
     bool showTabsOnHover_ = false;
     bool hoverRevealed_ = false;
     int hoverIdleTicks_ = 0;
-    // Area that, when hovered, reveals the tabs (the area reserved for tabs
-    // while they're hidden) and the area the revealed tabs take up.
+    // Area that, when hovered, reveals the tabs (the strip reserved while the
+    // tabs are hidden) and the area the revealed tabs take up.
     QRect hoverTriggerRect_;
     QRect hoverRevealRect_;
     QTimer hoverTimer_;
-    NotebookHoverBackdrop *hoverBackdrop_ = nullptr;
     bool showAddButton_ = false;
     int lineOffset_ = 20;
     int mouseWheelDelta_ = 0;
