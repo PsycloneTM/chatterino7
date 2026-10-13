@@ -238,6 +238,12 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         },
         false, "Choose which tabs are visible in the notebook");
 
+    SettingWidget::checkbox("Show tabs on hover", s.showTabsOnHover)
+        ->setTooltip("Hide the tabs until you move the mouse over the area "
+                     "where they normally are. The tabs are then shown on top "
+                     "of the chat.")
+        ->addTo(layout);
+
     SettingWidget::dropdown("Tab style", s.tabStyle)->addTo(layout);
     SettingWidget::checkbox("Extend wrapped tabs", s.growWrappedNotebookLines)
         ->setTooltip("When horizontal tabs are wrapped, extend the line for "
