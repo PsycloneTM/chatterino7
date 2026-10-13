@@ -13,6 +13,7 @@
 #include <QList>
 #include <QMenu>
 #include <QMessageBox>
+#include <QTimer>
 #include <QWidget>
 
 #include <functional>
@@ -29,6 +30,7 @@ class DrawnButton;
 class NotebookTab;
 class SplitContainer;
 class Split;
+class NotebookHoverBackdrop;
 
 using TabVisibilityFilter = std::function<bool(const NotebookTab *)>;
 
@@ -141,10 +143,23 @@ protected:
     bool getShowTabs() const;
     void setShowTabs(bool value);
 
+    bool getShowTabsOnHover() const;
+
+    /**
+     * @brief Hide the tabs until the mouse is moved over the tab area
+     *
+     * While the tabs are hidden, only a thin strip (where the tabs would
+     * normally be) is reserved. Hovering that strip shows the tabs on top of
+     * the selected page, without moving the page.
+     **/
+    void setShowTabsOnHover(bool value);
+
     void setGrowWrappedNotebookLines(bool value);
 
     void scaleChangedEvent(float scale_) override;
     void resizeEvent(QResizeEvent *) override;
+    void enterEvent(QEnterEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void wheelEvent(QWheelEvent *event) override;
     void paintEvent(QPaintEvent *) override;
@@ -214,6 +229,9 @@ private:
         int buttonWidth = 0;
         int buttonHeight = 0;
 
+        /// Whether the tabs should be laid out (and take up space)
+        bool showTabs = false;
+
         std::span<Item> items;
     };
 
@@ -229,6 +247,17 @@ private:
      * @brief Updates the visibility state of all tabs
      **/
     void updateTabVisibility();
+
+    /**
+     * @brief Whether tabs are visible right now (taking "show on hover" into account)
+     **/
+    bool tabsCurrentlyShown() const;
+    bool isHoverMode() const;
+    void updateAddButtonVisibility();
+
+    /// Show/hide the tabs when in "show on hover" mode
+    void setHoverRevealed(bool revealed);
+    void checkHoverState();
     void resizeAddButton();
 
     bool containsPage(QWidget *page) const;
@@ -252,6 +281,15 @@ private:
 
     bool allowUserTabManagement_ = false;
     bool showTabs_ = true;
+    bool showTabsOnHover_ = false;
+    bool hoverRevealed_ = false;
+    int hoverIdleTicks_ = 0;
+    // Area that, when hovered, reveals the tabs (the area reserved for tabs
+    // while they're hidden) and the area the revealed tabs take up.
+    QRect hoverTriggerRect_;
+    QRect hoverRevealRect_;
+    QTimer hoverTimer_;
+    NotebookHoverBackdrop *hoverBackdrop_ = nullptr;
     bool showAddButton_ = false;
     int lineOffset_ = 20;
     int mouseWheelDelta_ = 0;
@@ -296,6 +334,7 @@ public:
     QAction *showAllTabsAction;
     QAction *onlyShowLiveTabsAction;
     QAction *hideAllTabsAction;
+    QAction *showTabsOnHoverAction;
 
 protected:
     void showEvent(QShowEvent *event) override;

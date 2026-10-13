@@ -27,11 +27,14 @@
 #include "widgets/Window.hpp"
 
 #include <QActionGroup>
+#include <QApplication>
+#include <QCursor>
 #include <QDebug>
 #include <QFile>
 #include <QFormLayout>
 #include <QLayout>
 #include <QList>
+#include <QPainter>
 #include <QStandardPaths>
 #include <QUuid>
 #include <QWheelEvent>
@@ -44,6 +47,56 @@
 
 namespace chatterino {
 
+/// Background drawn behind the tabs while they're revealed on top of the page
+/// in "show tabs on hover" mode.
+class NotebookHoverBackdrop : public BaseWidget
+{
+public:
+    explicit NotebookHoverBackdrop(QWidget *parent)
+        : BaseWidget(parent)
+    {
+    }
+
+    void setTabLocation(NotebookTabLocation location)
+    {
+        if (this->location_ != location)
+        {
+            this->location_ = location;
+            this->update();
+        }
+    }
+
+protected:
+    void paintEvent(QPaintEvent * /*event*/) override
+    {
+        QPainter painter(this);
+        painter.fillRect(this->rect(), this->theme->window.background);
+
+        // divider on the side facing the page
+        const auto line = int(2 * this->scale());
+        QRect divider;
+        switch (this->location_)
+        {
+            case NotebookTabLocation::Top:
+                divider = {0, this->height() - line, this->width(), line};
+                break;
+            case NotebookTabLocation::Bottom:
+                divider = {0, 0, this->width(), line};
+                break;
+            case NotebookTabLocation::Left:
+                divider = {this->width() - line, 0, line, this->height()};
+                break;
+            case NotebookTabLocation::Right:
+                divider = {0, 0, line, this->height()};
+                break;
+        }
+        painter.fillRect(divider, this->theme->tabs.dividerLine);
+    }
+
+private:
+    NotebookTabLocation location_ = NotebookTabLocation::Top;
+};
+
 Notebook::Notebook(QWidget *parent)
     : BaseWidget(parent)
     , addButton_(new DrawnButton(DrawnButton::Symbol::Plus,
@@ -55,6 +108,15 @@ Notebook::Notebook(QWidget *parent)
 {
     this->addButton_->setHidden(true);
     this->addButton_->enableDrops({"chatterino/split"});
+
+    // Used by the "show tabs on hover" mode
+    this->setMouseTracking(true);
+    this->hoverBackdrop_ = new NotebookHoverBackdrop(this);
+    this->hoverBackdrop_->hide();
+    this->hoverTimer_.setInterval(100);
+    QObject::connect(&this->hoverTimer_, &QTimer::timeout, this, [this] {
+        this->checkHoverState();
+    });
 
     QObject::connect(
         this->addButton_, &Button::dropEvent, this, [this](QDropEvent *event) {
@@ -710,6 +772,12 @@ void Notebook::setShowTabs(bool value)
 {
     this->showTabs_ = value;
 
+    if (!value && this->hoverRevealed_)
+    {
+        this->hoverRevealed_ = false;
+        this->hoverTimer_.stop();
+    }
+
     this->setShowAddButton(value);
     this->performLayout();
 
@@ -719,6 +787,123 @@ void Notebook::setShowTabs(bool value)
     if (!value && getSettings()->informOnTabVisibilityToggle.getValue())
     {
         this->showTabVisibilityInfoPopup();
+    }
+}
+
+bool Notebook::getShowTabsOnHover() const
+{
+    return this->showTabsOnHover_;
+}
+
+void Notebook::setShowTabsOnHover(bool value)
+{
+    if (this->showTabsOnHover_ == value)
+    {
+        return;
+    }
+
+    this->showTabsOnHover_ = value;
+    this->hoverRevealed_ = false;
+    this->hoverIdleTicks_ = 0;
+    this->hoverTimer_.stop();
+
+    this->updateAddButtonVisibility();
+    this->performLayout();
+    this->updateTabVisibility();
+}
+
+bool Notebook::isHoverMode() const
+{
+    return this->showTabs_ && this->showTabsOnHover_;
+}
+
+bool Notebook::tabsCurrentlyShown() const
+{
+    return this->showTabs_ && (!this->showTabsOnHover_ || this->hoverRevealed_);
+}
+
+void Notebook::updateAddButtonVisibility()
+{
+    const bool hiddenUntilHover = this->isHoverMode() && !this->hoverRevealed_;
+    this->addButton_->setHidden(!this->showAddButton_ || hiddenUntilHover);
+}
+
+void Notebook::setHoverRevealed(bool revealed)
+{
+    if (this->hoverRevealed_ == revealed)
+    {
+        return;
+    }
+
+    this->hoverRevealed_ = revealed;
+    this->hoverIdleTicks_ = 0;
+
+    if (revealed)
+    {
+        this->hoverTimer_.start();
+    }
+    else
+    {
+        this->hoverTimer_.stop();
+    }
+
+    this->updateAddButtonVisibility();
+    this->performLayout();
+    this->updateTabVisibility();
+}
+
+void Notebook::checkHoverState()
+{
+    if (!this->isHoverMode() || !this->hoverRevealed_)
+    {
+        this->hoverTimer_.stop();
+        return;
+    }
+
+    // Keep the tabs open while they're being interacted with (context menus,
+    // rename dialogs, dragging a tab or a split onto a tab).
+    if (QApplication::activePopupWidget() != nullptr ||
+        QApplication::activeModalWidget() != nullptr ||
+        QApplication::mouseButtons() != Qt::NoButton)
+    {
+        this->hoverIdleTicks_ = 0;
+        return;
+    }
+
+    const auto area = this->hoverTriggerRect_.united(this->hoverRevealRect_);
+    if (area.contains(this->mapFromGlobal(QCursor::pos())))
+    {
+        this->hoverIdleTicks_ = 0;
+        return;
+    }
+
+    // Wait a little so the tabs don't flicker when the mouse briefly leaves
+    constexpr int TICKS_BEFORE_HIDING = 3;
+    if (++this->hoverIdleTicks_ >= TICKS_BEFORE_HIDING)
+    {
+        this->setHoverRevealed(false);
+    }
+}
+
+void Notebook::enterEvent(QEnterEvent *event)
+{
+    BaseWidget::enterEvent(event);
+
+    if (this->isHoverMode() && !this->hoverRevealed_ &&
+        this->hoverTriggerRect_.contains(event->position().toPoint()))
+    {
+        this->setHoverRevealed(true);
+    }
+}
+
+void Notebook::mouseMoveEvent(QMouseEvent *event)
+{
+    BaseWidget::mouseMoveEvent(event);
+
+    if (this->isHoverMode() && !this->hoverRevealed_ &&
+        this->hoverTriggerRect_.contains(event->position().toPoint()))
+    {
+        this->setHoverRevealed(true);
     }
 }
 
@@ -802,7 +987,7 @@ void Notebook::setShowAddButton(bool value)
 {
     this->showAddButton_ = value;
 
-    this->addButton_->setHidden(!value);
+    this->updateAddButtonVisibility();
 
     this->refresh();
 }
@@ -854,7 +1039,14 @@ void Notebook::performLayout(bool animated)
     const auto scale = this->scale();
     const auto tabHeight = int(NOTEBOOK_TAB_HEIGHT * scale);
     const auto spacing = static_cast<int>(2 * this->scale());
-    const LayoutContext ctx{
+
+    // In "show tabs on hover" mode, the page is laid out as if the tabs were
+    // hidden. If the tabs are currently revealed, they're placed on top of the
+    // page afterwards (see below), so the page doesn't move when hovering.
+    const bool hoverMode = this->isHoverMode();
+    const bool revealed = hoverMode && this->hoverRevealed_;
+
+    LayoutContext ctx{
         .left = spacing,
         .right = this->width() - spacing,
         .bottom = this->height(),
@@ -866,20 +1058,91 @@ void Notebook::performLayout(bool animated)
         .tabSpacer = std::max(1, static_cast<int>(scale)),
         .buttonWidth = tabHeight,
         .buttonHeight = tabHeight - 1,
+        .showTabs = this->showTabs_ && !hoverMode,
         .items = filteredItems,
     };
 
-    if (this->tabLocation_ == NotebookTabLocation::Top ||
-        this->tabLocation_ == NotebookTabLocation::Bottom)
+    const auto doLayout = [&](const LayoutContext &layoutCtx) {
+        if (this->tabLocation_ == NotebookTabLocation::Top ||
+            this->tabLocation_ == NotebookTabLocation::Bottom)
+        {
+            this->performHorizontalLayout(layoutCtx, animated);
+        }
+        else
+        {
+            this->performVerticalLayout(layoutCtx, animated);
+        }
+    };
+
+    // The area that's taken up by tabs, as computed from the last layout
+    const auto tabAreaRect = [&] {
+        switch (this->tabLocation_)
+        {
+            case NotebookTabLocation::Top:
+                return QRect(0, 0, this->width(), this->lineOffset_ + spacing);
+            case NotebookTabLocation::Bottom:
+                return QRect(0, this->lineOffset_, this->width(),
+                             this->height() - this->lineOffset_);
+            case NotebookTabLocation::Left:
+                return QRect(0, 0, this->lineOffset_ + spacing,
+                             this->height());
+            case NotebookTabLocation::Right:
+                return QRect(this->lineOffset_, 0,
+                             this->width() - this->lineOffset_,
+                             this->height());
+        }
+        return QRect();
+    };
+
+    doLayout(ctx);
+
+    if (hoverMode)
     {
-        this->performHorizontalLayout(ctx, animated);
+        // This is the area reserved while the tabs are hidden. Hovering it
+        // reveals the tabs.
+        this->hoverTriggerRect_ = tabAreaRect();
+    }
+
+    if (revealed)
+    {
+        const auto pageGeometry = this->selectedPage_ != nullptr
+                                      ? this->selectedPage_->geometry()
+                                      : QRect();
+        const auto lineOffset = this->lineOffset_;
+
+        ctx.showTabs = true;
+        doLayout(ctx);
+
+        this->hoverRevealRect_ = tabAreaRect();
+
+        // The tabs overlay the page, they don't push it away
+        if (this->selectedPage_ != nullptr)
+        {
+            this->selectedPage_->setGeometry(pageGeometry);
+        }
+        if (this->lineOffset_ != lineOffset)
+        {
+            this->lineOffset_ = lineOffset;
+            this->update();
+        }
+
+        this->hoverBackdrop_->setTabLocation(this->tabLocation_);
+        this->hoverBackdrop_->setGeometry(this->hoverRevealRect_);
+        this->hoverBackdrop_->show();
+        this->hoverBackdrop_->raise();
+
+        for (auto *btn : this->customButtons_)
+        {
+            btn->raise();
+        }
     }
     else
     {
-        this->performVerticalLayout(ctx, animated);
+        this->hoverRevealRect_ = {};
+        this->hoverBackdrop_->hide();
     }
 
-    if (this->showTabs_)
+    if (ctx.showTabs)
     {
         // raise elements
         for (auto &i : this->items_)
@@ -920,7 +1183,7 @@ void Notebook::performHorizontalLayout(const LayoutContext &ctx, bool animated)
         consumedButtonHeights = ctx.tabHeight;
     }
 
-    if (this->showTabs_)
+    if (ctx.showTabs)
     {
         auto layoutWrappedLine = [&](std::span<Item> line, int x, const int y,
                                      int accumulatedWidth) {
@@ -1114,7 +1377,7 @@ void Notebook::performVerticalLayout(const LayoutContext &ctx, bool animated)
     int columnCount = ceil((float)count / tabsPerColumn);
 
     // only add width of all the tabs if they are not hidden
-    if (this->showTabs_)
+    if (ctx.showTabs)
     {
         for (int col = 0; col < columnCount; col++)
         {
@@ -1405,7 +1668,7 @@ void Notebook::setTabVisibilityFilter(TabVisibilityFilter filter)
 
 bool Notebook::shouldShowTab(const NotebookTab *tab) const
 {
-    if (!this->showTabs_)
+    if (!this->tabsCurrentlyShown())
     {
         return false;
     }
@@ -1493,6 +1756,15 @@ SplitNotebook::SplitNotebook(Window *parent)
                      });
     tabVisibilityActionGroup->addAction(this->hideAllTabsAction);
 
+    // Not part of the exclusive group above: this works together with
+    // "Show all tabs" and "Only show live tabs".
+    this->showTabsOnHoverAction = new QAction("Show tabs on hover", this);
+    this->showTabsOnHoverAction->setCheckable(true);
+    QObject::connect(this->showTabsOnHoverAction, &QAction::triggered, this,
+                     [](bool checked) {
+                         getSettings()->showTabsOnHover.setValue(checked);
+                     });
+
     this->sortTabsAlphabeticallyAction_ =
         new QAction("Sort Tabs Alphabetically", this);
     if (this->isNotebookLayoutLocked())
@@ -1536,6 +1808,13 @@ SplitNotebook::SplitNotebook(Window *parent)
                     this->setTabVisibilityFilter(nullptr);
                     break;
             }
+        },
+        this->signalHolder_, true);
+
+    getSettings()->showTabsOnHover.connect(
+        [this](bool value, auto) {
+            this->showTabsOnHoverAction->setChecked(value);
+            this->setShowTabsOnHover(value);
         },
         this->signalHolder_, true);
 
@@ -1604,6 +1883,8 @@ void SplitNotebook::addNotebookActionsToMenu(QMenu *menu)
     submenu->addAction(this->showAllTabsAction);
     submenu->addAction(this->onlyShowLiveTabsAction);
     submenu->addAction(this->hideAllTabsAction);
+    submenu->addSeparator();
+    submenu->addAction(this->showTabsOnHoverAction);
 }
 
 void SplitNotebook::toggleTabVisibility()
