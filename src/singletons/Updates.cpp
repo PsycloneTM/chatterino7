@@ -314,6 +314,9 @@ void Updates::installUpdates()
 
 void Updates::checkForUpdates()
 {
+    // TEMP: testing only, remove before release
+    this->setStatus_(UpdateAvailable);
+    return;
 #ifndef CHATTERINO_DISABLE_UPDATER
     auto version = Version::instance();
 
