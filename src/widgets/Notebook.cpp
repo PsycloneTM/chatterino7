@@ -1542,10 +1542,8 @@ void SplitNotebook::addCustomButtons()
         getApp()->getWindows()->showSettingsDialog(
             this, SettingsDialogPreference::StreamerMode);
     });
-
     QObject::connect(getApp()->getStreamerMode(), &IStreamerMode::changed, this,
                      &SplitNotebook::updateStreamerModeIcon);
-
     this->updateStreamerModeIcon();
 
     this->performLayout(false);
@@ -1558,14 +1556,11 @@ void SplitNotebook::updateStreamerModeIcon()
         return;
     }
 
-    // The icon is an SvgButton configured with light/dark SVG paths when it is
-    // created, so this function only needs to update its visibility.
     const auto oldVisibility = this->streamerModeIcon_->isVisible();
     const auto newVisibility = getApp()->getStreamerMode()->isEnabled();
 
     this->streamerModeIcon_->setVisible(newVisibility);
 
-    // Showing or hiding the icon changes the available notebook space.
     if (oldVisibility != newVisibility)
     {
         this->performLayout();

@@ -245,7 +245,6 @@ void Window::addCustomTitlebarButtons()
             .dark = ":/buttons/streamerModeEnabledDark.svg",
             .light = ":/buttons/streamerModeEnabledLight.svg",
         });
-
     QObject::connect(getApp()->getStreamerMode(), &IStreamerMode::changed, this,
                      &Window::updateStreamerModeIcon);
 
@@ -259,12 +258,9 @@ void Window::updateStreamerModeIcon()
     {
         return;
     }
-
 #ifdef Q_OS_WIN
     assert(this->getType() == WindowType::Main);
 
-    // The titlebar icon is an SvgButton configured with light/dark SVG paths
-    // when it is created, so this function only needs to update visibility.
     this->streamerModeTitlebarIcon_->setVisible(
         getApp()->getStreamerMode()->isEnabled());
 #else
