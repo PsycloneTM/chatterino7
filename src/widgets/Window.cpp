@@ -26,7 +26,6 @@
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
-#include "widgets/buttons/TitlebarButton.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/dialogs/switcher/QuickSwitcherPopup.hpp"
 #include "widgets/dialogs/UpdateDialog.hpp"
@@ -226,11 +225,15 @@ void Window::addCustomTitlebarButtons()
     }
 
     // settings
-    this->addTitleBarButton<TitleBarButton>(
+    auto *settings = this->addTitleBarButton<SvgButton>(
         [this] {
             getApp()->getWindows()->showSettingsDialog(this);
         },
-        TitleBarButtonStyle::Settings);
+        SvgButton::Src{
+            .dark = ":/buttons/settings-darkMode.svg",
+            .light = ":/buttons/settings-lightMode.svg",
+        });
+    settings->setPadding({3, 3});
 
     // updates
     auto *update = this->addTitleBarButton<SvgButton>(
