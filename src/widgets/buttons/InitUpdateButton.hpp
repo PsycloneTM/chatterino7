@@ -18,7 +18,6 @@ class SvgButton;
 ///
 /// The `relayout` function gets called whenever the button visibility changes
 void initUpdateButton(SvgButton &button,
-
                       const std::function<void()> &relayout,
                       pajlada::Signals::SignalHolder &signalHolder);
 
