@@ -38,6 +38,9 @@ using namespace literals;
 
 namespace {
 
+// How much larger a gigantified emote is drawn
+constexpr float GIGANTIFIED_EMOTE_SCALE = 4.F;
+
 // Computes the bounding box for the given vector of images
 QSizeF getBoundingBoxSize(const std::vector<ImagePtr> &images)
 {

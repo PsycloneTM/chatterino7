@@ -538,16 +538,12 @@ public:
                         const MessageLayoutContext &ctx) override;
     EmotePtr getEmote() const;
 
-    /// Draw this emote GIGANTIFIED_EMOTE_SCALE times larger ("Gigantify an
-    /// Emote" channel point redeem).
+    /// Draw this emote larger ("Gigantify an Emote" channel point redeem).
     void setGigantified(bool gigantified);
 
     QJsonObject toJson() const override;
     std::string_view type() const override;
     std::unique_ptr<MessageElement> clone() const override;
-
-    /// How much larger a gigantified emote is drawn
-    static constexpr float GIGANTIFIED_EMOTE_SCALE = 4.F;
 
 protected:
     virtual MessageLayoutElement *makeImageLayoutElement(const ImagePtr &image,

@@ -1906,6 +1906,11 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
             textState.bitsLeft = optBits->toInt();
         }
 
+        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message")
+        {
+            textState.gigantifiedEmote = true;
+        }
+
         // Twitch emotes
         auto twitchSpecials = parseTwitchOccurrences(
             tags, content, static_cast<int>(messageOffset));
@@ -1922,17 +1927,6 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
                 return first.start == second.start;
             });
         twitchSpecials.erase(uniqueEmotes.begin(), uniqueEmotes.end());
-
-        // Twitch enlarges the last emote of a "Gigantify an Emote" message
-        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message")
-        {
-            auto emoteCount = std::ranges::count_if(
-                twitchSpecials, [](const auto &special) {
-                    return std::holds_alternative<TwitchEmoteOccurrence>(
-                        special.data);
-                });
-            textState.gigantifiedEmote = static_cast<int>(emoteCount) - 1;
-        }
 
         if (getSettings()->wrapAsciiArt && isAsciiArt(content))
         {
@@ -2849,10 +2843,7 @@ void MessageBuilder::addWords(
                 auto *element = this->emplace<EmoteElement>(
                     tok.emote, MessageElementFlag::Emote, this->textColor_);
                 element->setTrailingSpace(tok.trailingSpace);
-                if (state.twitchEmotesSeen++ == state.gigantifiedEmote)
-                {
-                    element->setGigantified(true);
-                }
+                element->setGigantified(state.gigantifiedEmote);
             },
             [&](const TokenizedGif &gif) {
                 this->addTwitchGif(gif.id, gif.originalText);

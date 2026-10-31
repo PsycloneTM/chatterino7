@@ -259,9 +259,7 @@ private:
         bool hasBits = false;
         bool bitsStacked = false;
         int bitsLeft = 0;
-        /// Index (among the Twitch emotes) of the emote to gigantify, or -1
-        int gigantifiedEmote = -1;
-        int twitchEmotesSeen = 0;
+        bool gigantifiedEmote = false;
     };
     void addEmoji(const EmotePtr &emote);
     void addTextOrEmote(TextState &state, QString string);
