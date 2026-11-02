@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common/FlagsEnum.hpp"
+#include "messages/EmoteModifiers.hpp"
 #include "messages/Link.hpp"
 
 #include <pajlada/signals/signalholder.hpp>
@@ -103,7 +104,8 @@ private:
 class ImageLayoutElement : public MessageLayoutElement
 {
 public:
-    ImageLayoutElement(MessageElement &creator, ImagePtr image, QSizeF size);
+    ImageLayoutElement(MessageElement &creator, ImagePtr image, QSizeF size,
+                       EmoteModifiers modifiers = {});
 
 protected:
     void addCopyTextToString(QString &str, uint32_t from = 0,
@@ -115,6 +117,7 @@ protected:
     qreal getXFromIndex(size_t index) override;
 
     ImagePtr image_;
+    EmoteModifiers modifiers_;
 };
 
 class LayeredImageLayoutElement : public MessageLayoutElement
@@ -122,7 +125,8 @@ class LayeredImageLayoutElement : public MessageLayoutElement
 public:
     LayeredImageLayoutElement(MessageElement &creator,
                               std::vector<ImagePtr> images,
-                              std::vector<QSizeF> sizes, QSizeF largestSize);
+                              std::vector<QSizeF> sizes, QSizeF largestSize,
+                              EmoteModifiers modifiers = {});
 
 protected:
     void addCopyTextToString(QString &str, uint32_t from = 0,
@@ -135,6 +139,7 @@ protected:
 
     std::vector<ImagePtr> images_;
     std::vector<QSizeF> sizes_;
+    EmoteModifiers modifiers_;
 };
 
 class ImageWithBackgroundLayoutElement : public ImageLayoutElement

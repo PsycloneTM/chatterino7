@@ -27,6 +27,48 @@ void alignRectBottomCenter(QRectF &rect, const QRectF &reference)
     rect.moveCenter(newCenter);
 }
 
+/// Mirrors and rotates everything that's painted after this call around the
+/// center of `rect`, like the modifiers ask for. The caller has to
+/// `save()`/`restore()` the painter. For sideways emotes, `rect` is already the
+/// rotated (swapped) size.
+///
+/// Returns the area to paint into (before it's rotated).
+QRectF applyModifierTransform(QPainter &painter, const QRectF &rect,
+                              const chatterino::EmoteModifiers &modifiers)
+{
+    auto size = rect.size();
+    if (modifiers.isSideways())
+    {
+        size.transpose();
+    }
+
+    painter.translate(rect.center());
+    painter.rotate(modifiers.rotation());
+    painter.scale(modifiers.flipHorizontal ? -1.0 : 1.0,
+                  modifiers.flipVertical ? -1.0 : 1.0);
+    return {-size.width() / 2, -size.height() / 2, size.width(),
+            size.height()};
+}
+
+/// Draws `pixmap` into `rect`, mirrored and/or rotated if the modifiers ask
+/// for it. For sideways emotes, `rect` is already the rotated (swapped) size.
+void drawModifiedPixmap(QPainter &painter, const QRectF &rect,
+                        const QPixmap &pixmap,
+                        const chatterino::EmoteModifiers &modifiers)
+{
+    if (!modifiers.flipHorizontal && !modifiers.flipVertical &&
+        modifiers.rotation() == 0)
+    {
+        painter.drawPixmap(rect, pixmap, QRectF());
+        return;
+    }
+
+    painter.save();
+    auto target = applyModifierTransform(painter, rect, modifiers);
+    painter.drawPixmap(target, pixmap, QRectF());
+    painter.restore();
+}
+
 }  // namespace
 
 namespace chatterino {
@@ -126,9 +168,10 @@ void MessageLayoutElement::setWordId(int wordId)
 //
 
 ImageLayoutElement::ImageLayoutElement(MessageElement &creator, ImagePtr image,
-                                       QSizeF size)
+                                       QSizeF size, EmoteModifiers modifiers)
     : MessageLayoutElement(creator, size)
     , image_(std::move(image))
+    , modifiers_(modifiers)
 {
     this->trailingSpace = creator.hasTrailingSpace();
 }
@@ -176,7 +219,8 @@ void ImageLayoutElement::paint(QPainter &painter,
     if (pixmap && !this->image_->animated())
     {
         // fourtf: make it use qreal values
-        painter.drawPixmap(QRectF(this->getRect()), *pixmap, QRectF());
+        drawModifiedPixmap(painter, QRectF(this->getRect()), *pixmap,
+                           this->modifiers_);
     }
 }
 
@@ -200,7 +244,8 @@ bool ImageLayoutElement::paintAnimated(QPainter &painter, qreal yOffset)
                 painter.save();
                 painter.setRenderHint(QPainter::SmoothPixmapTransform);
             }
-            painter.drawPixmap(QRectF(rect), *pixmap, QRectF());
+            drawModifiedPixmap(painter, QRectF(rect), *pixmap,
+                               this->modifiers_);
             if (smooth)
             {
                 painter.restore();
@@ -244,10 +289,11 @@ qreal ImageLayoutElement::getXFromIndex(size_t index)
 
 LayeredImageLayoutElement::LayeredImageLayoutElement(
     MessageElement &creator, std::vector<ImagePtr> images,
-    std::vector<QSizeF> sizes, QSizeF largestSize)
+    std::vector<QSizeF> sizes, QSizeF largestSize, EmoteModifiers modifiers)
     : MessageLayoutElement(creator, largestSize)
     , images_(std::move(images))
     , sizes_(std::move(sizes))
+    , modifiers_(modifiers)
 {
     assert(this->images_.size() == this->sizes_.size());
     this->trailingSpace = creator.hasTrailingSpace();
@@ -279,6 +325,13 @@ void LayeredImageLayoutElement::paint(QPainter &painter,
 {
     auto fullRect = QRectF(this->getRect());
 
+    bool modified = this->modifiers_.any();
+    if (modified)
+    {
+        painter.save();
+        fullRect = applyModifierTransform(painter, fullRect, this->modifiers_);
+    }
+
     for (size_t i = 0; i < this->images_.size(); ++i)
     {
         auto &img = this->images_[i];
@@ -293,7 +346,7 @@ void LayeredImageLayoutElement::paint(QPainter &painter,
             // As soon as we see an animated emote layer, we can stop rendering
             // the static emotes. The paintAnimated function will render any
             // static emotes layered on top of the first seen animated emote.
-            return;
+            break;
         }
 
         if (pixmap)
@@ -308,6 +361,11 @@ void LayeredImageLayoutElement::paint(QPainter &painter,
             painter.drawPixmap(destRect, *pixmap, QRectF());
         }
     }
+
+    if (modified)
+    {
+        painter.restore();
+    }
 }
 
 bool LayeredImageLayoutElement::paintAnimated(QPainter &painter, qreal yOffset)
@@ -315,6 +373,13 @@ bool LayeredImageLayoutElement::paintAnimated(QPainter &painter, qreal yOffset)
     auto fullRect = QRectF(this->getRect());
     fullRect.moveTop(fullRect.y() + yOffset);
     bool animatedFlag = false;
+
+    bool modified = this->modifiers_.any();
+    if (modified)
+    {
+        painter.save();
+        fullRect = applyModifierTransform(painter, fullRect, this->modifiers_);
+    }
 
     for (size_t i = 0; i < this->images_.size(); ++i)
     {
@@ -341,6 +406,11 @@ bool LayeredImageLayoutElement::paintAnimated(QPainter &painter, qreal yOffset)
                 animatedFlag = true;
             }
         }
+    }
+
+    if (modified)
+    {
+        painter.restore();
     }
     return animatedFlag;
 }

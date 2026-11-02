@@ -2,6 +2,8 @@
 
 ## Unversioned
 
+- Minor: Added support for BetterTTV and FrankerFaceZ emote modifiers (`w!`, `h!`, `v!`, `l!`, `r!`, `z!`, `ffzW`, `ffzX`, `ffzY`). This can be disabled with the "Enable emote modifiers" setting. (#0000)
+
 ## 2.5.5
 
 - Minor: Update emoji data to Unicode 17.0. (#6471)

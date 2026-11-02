@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common/FlagsEnum.hpp"
+#include "messages/EmoteModifiers.hpp"
 #include "messages/ImageSet.hpp"
 #include "messages/Link.hpp"
 #include "messages/MessageColor.hpp"
@@ -538,6 +539,16 @@ public:
                         const MessageLayoutContext &ctx) override;
     EmotePtr getEmote() const;
 
+    /// @brief Adds a modifier (like BTTV's `w!` or FFZ's `ffzX`) to this emote
+    ///
+    /// @param modifiers What the modifier does
+    /// @param modifierEmote The emote of the modifier. It's not shown, only
+    ///                      listed in the tooltip.
+    void addModifier(const EmoteModifiers &modifiers,
+                     const EmotePtr &modifierEmote);
+    const EmoteModifiers &modifiers() const;
+    const std::vector<EmotePtr> &modifierEmotes() const;
+
     QJsonObject toJson() const override;
     std::string_view type() const override;
     std::unique_ptr<MessageElement> clone() const override;
@@ -552,6 +563,8 @@ private:
     std::unique_ptr<TextElement> textElement_;
     MessageColor textColor_;
     bool usingFallbackColor_ = false;
+    EmoteModifiers modifiers_;
+    std::vector<EmotePtr> modifierEmotes_;
 
     EmotePtr emote_;
 };
@@ -574,6 +587,13 @@ public:
         const MessageColor &textElementColor = MessageColor::Text);
 
     void addEmoteLayer(const Emote &emote);
+
+    /// Like `EmoteElement::addModifier`. The modifiers apply to all layers
+    /// together.
+    void addModifier(const EmoteModifiers &modifiers,
+                     const EmotePtr &modifierEmote);
+    const EmoteModifiers &modifiers() const;
+    const std::vector<EmotePtr> &modifierEmotes() const;
 
     void addToContainer(MessageLayoutContainer &container,
                         const MessageLayoutContext &ctx) override;
@@ -599,6 +619,8 @@ private:
 
     std::vector<Emote> emotes_;
     std::vector<QString> emoteTooltips_;
+    EmoteModifiers modifiers_;
+    std::vector<EmotePtr> modifierEmotes_;
 
     std::unique_ptr<TextElement> textElement_;
     MessageColor textElementColor_;

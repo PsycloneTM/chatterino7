@@ -227,6 +227,12 @@ struct MockEmotes {
                 },
                 Emote{
                     .name = {u"Kappa"_s},
+                },
+                Emote{
+                    .name = {u"w!"_s},
+                },
+                Emote{
+                    .name = {u"z!"_s},
                 }),
             .ffz = makeEmotes(
                 Emote{
@@ -234,6 +240,9 @@ struct MockEmotes {
                 },
                 Emote{
                     .name = {u"Keepo"_s},
+                },
+                Emote{
+                    .name = {u"ffzX"_s},
                 }),
         };
     }

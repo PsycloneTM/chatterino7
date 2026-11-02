@@ -25,6 +25,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -253,6 +254,29 @@ EmotePtr EmoteElement::getEmote() const
     return this->emote_;
 }
 
+void EmoteElement::addModifier(const EmoteModifiers &modifiers,
+                               const EmotePtr &modifierEmote)
+{
+    this->modifiers_.merge(modifiers);
+
+    // Using the same modifier twice doesn't do anything extra
+    if (std::ranges::find(this->modifierEmotes_, modifierEmote) ==
+        this->modifierEmotes_.end())
+    {
+        this->modifierEmotes_.push_back(modifierEmote);
+    }
+}
+
+const EmoteModifiers &EmoteElement::modifiers() const
+{
+    return this->modifiers_;
+}
+
+const std::vector<EmotePtr> &EmoteElement::modifierEmotes() const
+{
+    return this->modifierEmotes_;
+}
+
 void EmoteElement::addToContainer(MessageLayoutContainer &container,
                                   const MessageLayoutContext &ctx)
 {
@@ -276,6 +300,15 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
 
             auto size = image->size() * container.getScale() * emoteScale;
 
+            if (this->modifiers_.wide)
+            {
+                size.setWidth(size.width() * 2);
+            }
+            if (this->modifiers_.isSideways())
+            {
+                size.transpose();
+            }
+
             container.addElement(this->makeImageLayoutElement(image, size));
             return;
         }
@@ -293,7 +326,7 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
 MessageLayoutElement *EmoteElement::makeImageLayoutElement(
     const ImagePtr &image, QSizeF size)
 {
-    return new ImageLayoutElement(*this, image, size);
+    return new ImageLayoutElement(*this, image, size, this->modifiers_);
 }
 
 void EmoteElement::ensureText(bool asFallback)
@@ -322,6 +355,19 @@ QJsonObject EmoteElement::toJson() const
     {
         base["text"_L1] = this->textElement_->toJson();
     }
+    if (this->modifiers_.any())
+    {
+        base["modifiers"_L1] = this->modifiers_.toJson();
+    }
+    if (!this->modifierEmotes_.empty())
+    {
+        QJsonArray modifierEmotes;
+        for (const auto &modifierEmote : this->modifierEmotes_)
+        {
+            modifierEmotes.append(modifierEmote->toJson());
+        }
+        base["modifierEmotes"_L1] = modifierEmotes;
+    }
 
     return base;
 }
@@ -335,6 +381,8 @@ std::unique_ptr<MessageElement> EmoteElement::clone() const
 {
     auto elem = std::make_unique<EmoteElement>(this->emote_, this->getFlags(),
                                                this->textColor_);
+    elem->modifiers_ = this->modifiers_;
+    elem->modifierEmotes_ = this->modifierEmotes_;
     elem->cloneFrom(*this);
     return elem;
 }
@@ -379,6 +427,21 @@ void LayeredEmoteElement::addToContainer(MessageLayoutContainer &container,
                 individualSizes.push_back(img->size() * overallScale);
             }
 
+            // The layers are laid out (and painted) unrotated, only the size
+            // of the whole element swaps for sideways emotes.
+            if (this->modifiers_.wide)
+            {
+                largestSize.setWidth(largestSize.width() * 2);
+                for (auto &size : individualSizes)
+                {
+                    size.setWidth(size.width() * 2);
+                }
+            }
+            if (this->modifiers_.isSideways())
+            {
+                largestSize.transpose();
+            }
+
             container.addElement(this->makeImageLayoutElement(
                 images, individualSizes, largestSize));
         }
@@ -392,6 +455,28 @@ void LayeredEmoteElement::addToContainer(MessageLayoutContainer &container,
             }
         }
     }
+}
+
+void LayeredEmoteElement::addModifier(const EmoteModifiers &modifiers,
+                                      const EmotePtr &modifierEmote)
+{
+    this->modifiers_.merge(modifiers);
+
+    if (std::ranges::find(this->modifierEmotes_, modifierEmote) ==
+        this->modifierEmotes_.end())
+    {
+        this->modifierEmotes_.push_back(modifierEmote);
+    }
+}
+
+const EmoteModifiers &LayeredEmoteElement::modifiers() const
+{
+    return this->modifiers_;
+}
+
+const std::vector<EmotePtr> &LayeredEmoteElement::modifierEmotes() const
+{
+    return this->modifierEmotes_;
 }
 
 std::vector<ImagePtr> LayeredEmoteElement::getLoadedImages(float scale)
@@ -415,7 +500,8 @@ MessageLayoutElement *LayeredEmoteElement::makeImageLayoutElement(
     const std::vector<ImagePtr> &images, const std::vector<QSizeF> &sizes,
     QSizeF largestSize)
 {
-    return new LayeredImageLayoutElement(*this, images, sizes, largestSize);
+    return new LayeredImageLayoutElement(*this, images, sizes, largestSize,
+                                         this->modifiers_);
 }
 
 void LayeredEmoteElement::updateTooltips()
@@ -531,6 +617,20 @@ QJsonObject LayeredEmoteElement::toJson() const
 
     base["textElementColor"_L1] = this->textElementColor_.toString();
 
+    if (this->modifiers_.any())
+    {
+        base["modifiers"_L1] = this->modifiers_.toJson();
+    }
+    if (!this->modifierEmotes_.empty())
+    {
+        QJsonArray modifierEmotes;
+        for (const auto &modifierEmote : this->modifierEmotes_)
+        {
+            modifierEmotes.append(modifierEmote->toJson());
+        }
+        base["modifierEmotes"_L1] = modifierEmotes;
+    }
+
     return base;
 }
 
@@ -544,6 +644,8 @@ std::unique_ptr<MessageElement> LayeredEmoteElement::clone() const
     std::vector<Emote> emotesCopy = this->emotes_;
     auto elem = std::make_unique<LayeredEmoteElement>(
         std::move(emotesCopy), this->getFlags(), this->textElementColor_);
+    elem->modifiers_ = this->modifiers_;
+    elem->modifierEmotes_ = this->modifierEmotes_;
     elem->cloneFrom(*this);
     return elem;
 }

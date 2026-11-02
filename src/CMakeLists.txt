@@ -369,6 +369,8 @@ set(SOURCE_FILES
         messages/AsciiArt.hpp
         messages/Emote.cpp
         messages/Emote.hpp
+        messages/EmoteModifiers.cpp
+        messages/EmoteModifiers.hpp
         messages/Image.cpp
         messages/Image.hpp
         messages/ImageSet.cpp

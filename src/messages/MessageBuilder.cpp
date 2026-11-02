@@ -17,6 +17,7 @@
 #include "controllers/userdata/UserDataController.hpp"
 #include "messages/AsciiArt.hpp"
 #include "messages/Emote.hpp"
+#include "messages/EmoteModifiers.hpp"
 #include "messages/Image.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageColor.hpp"
@@ -1982,8 +1983,102 @@ void MessageBuilder::addEmoji(const EmotePtr &emote)
     this->emplace<EmoteElement>(emote, MessageElementFlag::EmojiAll);
 }
 
+void MessageBuilder::addEmote(TextState &state, const EmotePtr &emote,
+                              bool trailingSpace)
+{
+    auto modifiers = std::exchange(state.pendingModifiers, {});
+
+    if (std::ranges::any_of(modifiers, [](const auto &modifier) {
+            return modifier.modifiers.noSpace;
+        }) &&
+        !this->isEmpty())
+    {
+        // `z!`: no space between this emote and the previous one
+        auto &previous = this->back();
+        if (dynamic_cast<EmoteElement *>(&previous) != nullptr ||
+            dynamic_cast<LayeredEmoteElement *>(&previous) != nullptr)
+        {
+            previous.setTrailingSpace(false);
+        }
+    }
+
+    auto *element = this->emplace<EmoteElement>(
+        emote, MessageElementFlag::Emote, this->textColor_);
+    element->setTrailingSpace(trailingSpace);
+    for (const auto &modifier : modifiers)
+    {
+        element->addModifier(modifier.modifiers, modifier.emote);
+    }
+}
+
+bool MessageBuilder::tryAppendModifier(TextState &state, const QString &string)
+{
+    if (!getSettings()->enableEmoteModifiers)
+    {
+        return false;
+    }
+
+    auto word = parseEmoteModifier(string);
+    if (!word)
+    {
+        return false;
+    }
+
+    // Modifiers are emotes themselves: only treat them as modifiers if the
+    // emote exists (e.g. BTTV/FFZ global emotes are enabled).
+    auto emote = parseEmote(state.twitchChannel, EmoteNameView{string});
+    if (!emote)
+    {
+        return false;
+    }
+
+    if (word->appliesToNext)
+    {
+        state.pendingModifiers.push_back({word->modifiers, std::move(emote)});
+        return true;
+    }
+
+    // If there are pending modifiers, this word is the emote they apply to.
+    if (!state.pendingModifiers.empty() || this->isEmpty())
+    {
+        return false;
+    }
+
+    auto *previous = dynamic_cast<EmoteElement *>(&this->back());
+    if (previous != nullptr &&
+        previous->getFlags().has(MessageElementFlag::Emote))
+    {
+        previous->addModifier(word->modifiers, emote);
+        return true;
+    }
+
+    if (auto *layered = dynamic_cast<LayeredEmoteElement *>(&this->back()))
+    {
+        layered->addModifier(word->modifiers, emote);
+        return true;
+    }
+
+    // There's nothing to modify: shown as the normal emote
+    return false;
+}
+
+void MessageBuilder::flushPendingModifiers(TextState &state)
+{
+    for (const auto &modifier : state.pendingModifiers)
+    {
+        this->emplace<EmoteElement>(modifier.emote, MessageElementFlag::Emote,
+                                    this->textColor_);
+    }
+    state.pendingModifiers.clear();
+}
+
 void MessageBuilder::addTextOrEmote(TextState &state, QString string)
 {
+    if (this->tryAppendModifier(state, string))
+    {
+        return;
+    }
+
     if (state.hasBits && this->tryAppendCheermote(state, string))
     {
         // This string was parsed as a cheermote
@@ -1995,11 +2090,14 @@ void MessageBuilder::addTextOrEmote(TextState &state, QString string)
     // Emote name: "forsenPuke" - if string in ignoredEmotes
     // Will match emote regardless of source (i.e. bttv, ffz)
     // Emote source + name: "bttv:nyanPls"
-    if (this->tryAppendEmote(state.twitchChannel, EmoteNameView{string}))
+    if (this->tryAppendEmote(state, EmoteNameView{string}))
     {
         // Successfully appended an emote
         return;
     }
+
+    // The pending modifiers had no emote to apply to
+    this->flushPendingModifiers(state);
 
     // Actually just text
     auto link = linkparser::parse(string);
@@ -2772,10 +2870,9 @@ void MessageBuilder::appendUsername(Communi::TagsRef tags,
     }
 }
 
-Outcome MessageBuilder::tryAppendEmote(TwitchChannel *twitchChannel,
-                                       EmoteNameView name)
+Outcome MessageBuilder::tryAppendEmote(TextState &state, EmoteNameView name)
 {
-    auto emote = parseEmote(twitchChannel, name);
+    auto emote = parseEmote(state.twitchChannel, name);
 
     if (!emote)
     {
@@ -2791,6 +2888,9 @@ Outcome MessageBuilder::tryAppendEmote(TwitchChannel *twitchChannel,
         {
             // Make sure to access asEmote before taking ownership when releasing
             auto baseEmote = asEmote->getEmote();
+            // The modifiers of the base emote apply to the whole stack
+            auto modifiers = asEmote->modifiers();
+            auto modifierEmotes = asEmote->modifierEmotes();
             // Need to remove EmoteElement and replace with LayeredEmoteElement
             auto baseEmoteElement = this->releaseBack();
 
@@ -2798,10 +2898,14 @@ Outcome MessageBuilder::tryAppendEmote(TwitchChannel *twitchChannel,
                 {baseEmote, baseEmoteElement->getFlags()},
                 {emote, MessageElementFlag::Emote},
             };
-            this->emplace<LayeredEmoteElement>(
+            auto *layered = this->emplace<LayeredEmoteElement>(
                 std::move(layers),
                 baseEmoteElement->getFlags() | MessageElementFlag::Emote,
                 this->textColor_);
+            for (const auto &modifierEmote : modifierEmotes)
+            {
+                layered->addModifier(modifiers, modifierEmote);
+            }
             return Success;
         }
 
@@ -2816,8 +2920,7 @@ Outcome MessageBuilder::tryAppendEmote(TwitchChannel *twitchChannel,
         // No emote to merge with, just show as regular emote
     }
 
-    this->emplace<EmoteElement>(emote, MessageElementFlag::Emote,
-                                this->textColor_);
+    this->addEmote(state, emote, true);
     return Success;
 }
 
@@ -2833,17 +2936,20 @@ void MessageBuilder::addWords(
                 this->addTextOrEmote(state, tok.text.toString());
             },
             [&](const TokenizedEmoji &tok) {
+                this->flushPendingModifiers(state);
                 this->addEmoji(tok.emote);
             },
             [&](const TokenizedEmote &tok) {
-                this->emplace<EmoteElement>(
-                        tok.emote, MessageElementFlag::Emote, this->textColor_)
-                    ->setTrailingSpace(tok.trailingSpace);
+                this->addEmote(state, tok.emote, tok.trailingSpace);
             },
             [&](const TokenizedGif &gif) {
+                this->flushPendingModifiers(state);
                 this->addTwitchGif(gif.id, gif.originalText);
             },
         });
+
+    // Modifiers at the end of the message have no emote to apply to
+    this->flushPendingModifiers(state);
 }
 
 void MessageBuilder::appendTwitchBadges(Communi::TagsRef tags,

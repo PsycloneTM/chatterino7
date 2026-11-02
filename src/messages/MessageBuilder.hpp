@@ -6,6 +6,7 @@
 
 #include "common/Aliases.hpp"
 #include "common/Outcome.hpp"
+#include "messages/EmoteModifiers.hpp"
 #include "messages/MessageColor.hpp"
 #include "messages/MessageElement.hpp"
 #include "messages/MessageFlag.hpp"
@@ -22,6 +23,7 @@
 #include <ctime>
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace chatterino {
 
@@ -254,19 +256,44 @@ public:
         const TwitchChannel &channel, const HelixPinnedChatMessage &pin);
 
 private:
+    /// A modifier (`w!`, ...) that applies to the next emote
+    struct PendingModifier {
+        EmoteModifiers modifiers;
+        /// The emote of the modifier word
+        EmotePtr emote;
+    };
+
     struct TextState {
         TwitchChannel *twitchChannel = nullptr;
         bool hasBits = false;
         bool bitsStacked = false;
         int bitsLeft = 0;
+        /// Modifiers that were seen right before the current word. They're
+        /// only used if an emote follows, otherwise they're shown as the
+        /// normal emotes (see `flushPendingModifiers`).
+        std::vector<PendingModifier> pendingModifiers;
     };
     void addEmoji(const EmotePtr &emote);
+    /// Appends `emote` and applies the pending modifiers of `state` to it
+    void addEmote(TextState &state, const EmotePtr &emote, bool trailingSpace);
     void addTextOrEmote(TextState &state, QString string);
+
+    /// Handles `string` if it's the word of an emote modifier
+    ///
+    /// Modifiers that apply to the next emote (BTTV) are added to the pending
+    /// modifiers of `state`, modifiers that apply to the previous emote (FFZ)
+    /// are applied right away.
+    ///
+    /// @returns true if `string` was consumed
+    bool tryAppendModifier(TextState &state, const QString &string);
+    /// Shows the pending modifiers of `state` as the normal emotes (because
+    /// no emote followed them)
+    void flushPendingModifiers(TextState &state);
 
     void addTwitchGif(const QString &id, QStringView originalText);
 
     Outcome tryAppendCheermote(TextState &state, const QString &string);
-    Outcome tryAppendEmote(TwitchChannel *twitchChannel, EmoteNameView name);
+    Outcome tryAppendEmote(TextState &state, EmoteNameView name);
 
     bool isEmpty() const;
     MessageElement &back();

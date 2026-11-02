@@ -650,6 +650,13 @@ void GeneralPage::initLayout(GeneralPageView &layout)
             "cvMask and 7TV's RainTime, will appear as normal emotes.")
         ->addTo(layout);
 
+    SettingWidget::checkbox("Enable emote modifiers", s.enableEmoteModifiers)
+        ->setTooltip(
+            "When disabled, BTTV's and FFZ's modifier emotes, such as w! and "
+            "ffzX, will appear as normal emotes instead of changing the emote "
+            "next to them.")
+        ->addTo(layout);
+
     SettingWidget::checkbox("Enable emote completion by typing :",
                             s.emoteCompletionWithColon)
         ->setTooltip(
