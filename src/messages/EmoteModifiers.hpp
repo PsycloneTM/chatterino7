@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "messages/ImageEffect.hpp"
+
 #include <QStringView>
 
 #include <optional>
@@ -12,15 +14,21 @@ class QJsonObject;
 
 namespace chatterino {
 
-/// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!`, `l!`, `r!`, `z!`
-/// (applied to the next emote) and FFZ's `ffzW`, `ffzX`, `ffzY` (applied to the
-/// previous emote).
+/// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!`, `l!`, `r!`, `c!`,
+/// `p!`, `s!`, `z!` (applied to the next emote) and FFZ's `ffzW`, `ffzX`,
+/// `ffzY`, `ffzCursed` (applied to the previous emote).
 struct EmoteModifiers {
     bool wide = false;
     bool flipHorizontal = false;
     bool flipVertical = false;
     bool rotateLeft = false;
     bool rotateRight = false;
+    /// `c!`/`ffzCursed` (black and white) or `p!` (rainbow). Unlike the other
+    /// modifiers, this isn't applied while painting but baked into the image
+    /// once (see `Image::withEffect`).
+    ImageEffect colorEffect = ImageEffect::None;
+    /// `s!`. Baked into the image like `colorEffect` (and combinable with it).
+    bool shake = false;
     /// `z!`. Removes the space between the emote and the one before it.
     bool noSpace = false;
 
@@ -28,6 +36,10 @@ struct EmoteModifiers {
 
     /// Whether any modifier is set
     bool any() const;
+
+    /// The effect that gets baked into the image of the emote (see
+    /// `Image::withEffect`).
+    ImageEffect imageEffect() const;
 
     /// Clockwise rotation in degrees (0, 90, 180 or 270).
     /// Using both `l!` and `r!` cancels out.

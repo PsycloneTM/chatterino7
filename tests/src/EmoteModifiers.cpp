@@ -13,7 +13,7 @@ using namespace chatterino;
 TEST(EmoteModifiers, ParseBttv)
 {
     for (const auto *word :
-         {u"w!", u"h!", u"v!", u"l!", u"r!", u"z!"})
+         {u"w!", u"h!", u"v!", u"l!", u"r!", u"c!", u"p!", u"s!", u"z!"})
     {
         auto parsed = parseEmoteModifier(word);
         ASSERT_TRUE(parsed) << QStringView(word).toString().toStdString();
@@ -26,12 +26,17 @@ TEST(EmoteModifiers, ParseBttv)
     EXPECT_TRUE(parseEmoteModifier(u"v!")->modifiers.flipVertical);
     EXPECT_TRUE(parseEmoteModifier(u"l!")->modifiers.rotateLeft);
     EXPECT_TRUE(parseEmoteModifier(u"r!")->modifiers.rotateRight);
+    EXPECT_EQ(parseEmoteModifier(u"c!")->modifiers.colorEffect,
+              ImageEffect::Cursed);
+    EXPECT_EQ(parseEmoteModifier(u"p!")->modifiers.colorEffect,
+              ImageEffect::Party);
+    EXPECT_TRUE(parseEmoteModifier(u"s!")->modifiers.shake);
     EXPECT_TRUE(parseEmoteModifier(u"z!")->modifiers.noSpace);
 }
 
 TEST(EmoteModifiers, ParseFfz)
 {
-    for (const auto *word : {u"ffzW", u"ffzX", u"ffzY"})
+    for (const auto *word : {u"ffzW", u"ffzX", u"ffzY", u"ffzCursed"})
     {
         auto parsed = parseEmoteModifier(word);
         ASSERT_TRUE(parsed) << QStringView(word).toString().toStdString();
@@ -42,6 +47,8 @@ TEST(EmoteModifiers, ParseFfz)
     EXPECT_TRUE(parseEmoteModifier(u"ffzW")->modifiers.wide);
     EXPECT_TRUE(parseEmoteModifier(u"ffzX")->modifiers.flipHorizontal);
     EXPECT_TRUE(parseEmoteModifier(u"ffzY")->modifiers.flipVertical);
+    EXPECT_EQ(parseEmoteModifier(u"ffzCursed")->modifiers.colorEffect,
+              ImageEffect::Cursed);
 }
 
 TEST(EmoteModifiers, ParseNotAModifier)
@@ -76,19 +83,41 @@ TEST(EmoteModifiers, Rotation)
 
 TEST(EmoteModifiers, Merge)
 {
-    EmoteModifiers modifiers = {.wide = true, .rotateLeft = true};
+    EmoteModifiers modifiers = {.wide = true, .shake = true};
     modifiers.merge({.flipVertical = true, .noSpace = true});
     EXPECT_EQ(modifiers, (EmoteModifiers{
                              .wide = true,
                              .flipVertical = true,
-                             .rotateLeft = true,
+                             .shake = true,
                              .noSpace = true,
                          }));
 
-    // Merging something that's already set changes nothing
+    // Color effects don't combine, the last one wins
+    modifiers.merge({.colorEffect = ImageEffect::Cursed});
+    EXPECT_EQ(modifiers.colorEffect, ImageEffect::Cursed);
+    modifiers.merge({.colorEffect = ImageEffect::Party});
+    EXPECT_EQ(modifiers.colorEffect, ImageEffect::Party);
     modifiers.merge({.wide = true});
-    EXPECT_TRUE(modifiers.wide);
-    EXPECT_TRUE(modifiers.rotateLeft);
+    EXPECT_EQ(modifiers.colorEffect, ImageEffect::Party);
+}
+
+TEST(EmoteModifiers, ImageEffect)
+{
+    EXPECT_EQ(EmoteModifiers{}.imageEffect(), ImageEffect::None);
+    EXPECT_EQ((EmoteModifiers{.wide = true, .rotateLeft = true}.imageEffect()),
+              ImageEffect::None);
+    EXPECT_EQ((EmoteModifiers{.colorEffect = ImageEffect::Cursed}.imageEffect()),
+              ImageEffect::Cursed);
+    EXPECT_EQ((EmoteModifiers{.colorEffect = ImageEffect::Party}.imageEffect()),
+              ImageEffect::Party);
+    EXPECT_EQ((EmoteModifiers{.shake = true}.imageEffect()),
+              ImageEffect::Shake);
+    EXPECT_EQ((EmoteModifiers{.colorEffect = ImageEffect::Cursed, .shake = true}
+                   .imageEffect()),
+              ImageEffect::CursedShake);
+    EXPECT_EQ((EmoteModifiers{.colorEffect = ImageEffect::Party, .shake = true}
+                   .imageEffect()),
+              ImageEffect::PartyShake);
 }
 
 TEST(EmoteModifiers, ToJson)
@@ -97,11 +126,11 @@ TEST(EmoteModifiers, ToJson)
 
     auto json = EmoteModifiers{
         .wide = true,
-        .rotateLeft = true,
+        .colorEffect = ImageEffect::Party,
         .noSpace = true,
     }.toJson();
     EXPECT_EQ(json.size(), 3);
     EXPECT_TRUE(json["wide"].toBool());
-    EXPECT_TRUE(json["rotateLeft"].toBool());
+    EXPECT_TRUE(json["party"].toBool());
     EXPECT_TRUE(json["noSpace"].toBool());
 }

@@ -326,7 +326,12 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
 MessageLayoutElement *EmoteElement::makeImageLayoutElement(
     const ImagePtr &image, QSizeF size)
 {
-    return new ImageLayoutElement(*this, image, size, this->modifiers_);
+    // For `c!`, `p!`, `s!` and `ffzCursed`: this is the (cached) image with
+    // the effect already rendered into it, nothing is filtered or moved while
+    // painting.
+    auto effectImage = image->withEffect(this->modifiers_.imageEffect());
+
+    return new ImageLayoutElement(*this, effectImage, size, this->modifiers_);
 }
 
 void EmoteElement::ensureText(bool asFallback)
@@ -491,7 +496,7 @@ std::vector<ImagePtr> LayeredEmoteElement::getLoadedImages(float scale)
         {
             continue;
         }
-        res.push_back(image);
+        res.push_back(image->withEffect(this->modifiers_.imageEffect()));
     }
     return res;
 }

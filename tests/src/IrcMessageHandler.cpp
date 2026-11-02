@@ -233,6 +233,12 @@ struct MockEmotes {
                 },
                 Emote{
                     .name = {u"z!"_s},
+                },
+                Emote{
+                    .name = {u"c!"_s},
+                },
+                Emote{
+                    .name = {u"s!"_s},
                 }),
             .ffz = makeEmotes(
                 Emote{

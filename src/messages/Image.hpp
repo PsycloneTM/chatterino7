@@ -5,14 +5,17 @@
 #pragma once
 
 #include "common/Aliases.hpp"
+#include "messages/ImageEffect.hpp"
 #include "util/DebugCount.hpp"
 
+#include <magic_enum/magic_enum.hpp>
 #include <QList>
 #include <QPixmap>
 #include <QString>
 #include <QThread>
 #include <QTimer>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <map>
@@ -52,6 +55,8 @@ public:
     std::optional<QPixmap> current() const;
     /// Returns the size of the first frame, if one has been loaded.
     std::optional<QSize> frameSize() const;
+    /// Returns a copy of all frames (the pixmaps themselves are shared).
+    QList<Frame> snapshot() const;
 
 private:
     struct Storage;
@@ -103,15 +108,31 @@ public:
     QSizeF size() const;
     bool animated() const;
 
+    /// @brief Returns a version of this image with `effect` applied.
+    ///
+    /// The effect is rendered into the frames of the returned image once (on a
+    /// worker thread) and then cached for as long as this image lives, so
+    /// painting it costs the same as painting any other image. Until it's
+    /// rendered, the returned image has no pixmap.
+    ///
+    /// Returns this image for `ImageEffect::None`.
+    ///
+    /// GUI thread only.
+    ImagePtr withEffect(ImageEffect effect);
+
     bool operator==(const Image &image) = delete;
 
 private:
     Image();
     Image(const Url &url, qreal scale, QSize expectedSize);
     Image(qreal scale);
+    /// Creates an image that shows `source` with `effect` applied
+    Image(const ImagePtr &source, ImageEffect effect);
 
     void setPixmap(const QPixmap &pixmap);
     void actuallyLoad();
+    /// Renders the effect of this image from the frames of its source
+    void loadEffect();
     void expireFrames();
 
     const Url url_{};
@@ -130,6 +151,18 @@ private:
 
     // gui thread only
     std::unique_ptr<detail::Frames> frames_;
+
+    /// The effect this image shows its `effectSource_` with. `None` for
+    /// images that aren't derived from another image.
+    const ImageEffect effect_{ImageEffect::None};
+    /// Only set if `effect_` isn't `None`. This is weak, because the source
+    /// owns its derived images (`effectImages_`).
+    const std::weak_ptr<Image> effectSource_{};
+
+    /// Images derived from this one (indexed by `ImageEffect`), kept so
+    /// every effect is only rendered once per image.
+    // gui thread only
+    std::array<ImagePtr, magic_enum::enum_count<ImageEffect>()> effectImages_;
 
     friend class ImageExpirationPool;
     friend void detail::assignFrames(std::weak_ptr<Image>,

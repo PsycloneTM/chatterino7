@@ -31,6 +31,15 @@ const std::array MODIFIERS{
                   {.modifiers = {.rotateLeft = true}, .appliesToNext = true}},
     ModifierEntry{u"r!",
                   {.modifiers = {.rotateRight = true}, .appliesToNext = true}},
+    ModifierEntry{
+        u"c!",
+        {.modifiers = {.colorEffect = ImageEffect::Cursed},
+         .appliesToNext = true}},
+    ModifierEntry{
+        u"p!",
+        {.modifiers = {.colorEffect = ImageEffect::Party},
+         .appliesToNext = true}},
+    ModifierEntry{u"s!", {.modifiers = {.shake = true}, .appliesToNext = true}},
     ModifierEntry{u"z!",
                   {.modifiers = {.noSpace = true}, .appliesToNext = true}},
     // FFZ
@@ -42,6 +51,10 @@ const std::array MODIFIERS{
     ModifierEntry{u"ffzY",
                   {.modifiers = {.flipVertical = true},
                    .appliesToNext = false}},
+    ModifierEntry{
+        u"ffzCursed",
+        {.modifiers = {.colorEffect = ImageEffect::Cursed},
+         .appliesToNext = false}},
 };
 
 }  // namespace
@@ -53,7 +66,21 @@ using namespace literals;
 bool EmoteModifiers::any() const
 {
     return this->noSpace || this->wide || this->flipHorizontal ||
-           this->flipVertical || this->rotateLeft || this->rotateRight;
+           this->flipVertical || this->rotateLeft || this->rotateRight ||
+           this->colorEffect != ImageEffect::None || this->shake;
+}
+
+ImageEffect EmoteModifiers::imageEffect() const
+{
+    switch (this->colorEffect)
+    {
+        case ImageEffect::Cursed:
+            return this->shake ? ImageEffect::CursedShake : ImageEffect::Cursed;
+        case ImageEffect::Party:
+            return this->shake ? ImageEffect::PartyShake : ImageEffect::Party;
+        default:
+            return this->shake ? ImageEffect::Shake : ImageEffect::None;
+    }
 }
 
 int EmoteModifiers::rotation() const
@@ -73,6 +100,12 @@ void EmoteModifiers::merge(const EmoteModifiers &other)
     this->flipVertical |= other.flipVertical;
     this->rotateLeft |= other.rotateLeft;
     this->rotateRight |= other.rotateRight;
+    // Color effects don't combine, the last one wins (`c! p!` is rainbow)
+    if (other.colorEffect != ImageEffect::None)
+    {
+        this->colorEffect = other.colorEffect;
+    }
+    this->shake |= other.shake;
     this->noSpace |= other.noSpace;
 }
 
@@ -98,6 +131,18 @@ QJsonObject EmoteModifiers::toJson() const
     if (this->rotateRight)
     {
         obj["rotateRight"_L1] = true;
+    }
+    if (this->colorEffect == ImageEffect::Cursed)
+    {
+        obj["cursed"_L1] = true;
+    }
+    if (this->colorEffect == ImageEffect::Party)
+    {
+        obj["party"_L1] = true;
+    }
+    if (this->shake)
+    {
+        obj["shake"_L1] = true;
     }
     if (this->noSpace)
     {
