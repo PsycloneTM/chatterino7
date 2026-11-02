@@ -1,5 +1,7 @@
 # Changelog
 
+## Unversioned
+
 ## 2.5.5
 
 - Minor: Update emoji data to Unicode 17.0. (#6471)
