@@ -65,6 +65,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <unordered_set>
 
 using namespace chatterino::literals;
@@ -486,6 +487,82 @@ EmotePtr parseEmote(TwitchChannel *twitchChannel, const QString &userID,
     return {};
 }
 
+struct ModifierToken {
+    EmoteModifiers modifiers;
+    /// BTTV modifiers apply to the next emote, FFZ ones to the previous one.
+    bool appliesToNext;
+};
+
+std::optional<ModifierToken> parseModifierToken(QStringView word)
+{
+    if (word == u"w!")
+    {
+        return ModifierToken{.modifiers = {.wide = true},
+                             .appliesToNext = true};
+    }
+    if (word == u"h!")
+    {
+        return ModifierToken{.modifiers = {.flipHorizontal = true},
+                             .appliesToNext = true};
+    }
+    if (word == u"v!")
+    {
+        return ModifierToken{.modifiers = {.flipVertical = true},
+                             .appliesToNext = true};
+    }
+    if (word == u"l!")
+    {
+        return ModifierToken{.modifiers = {.rotateLeft = true},
+                             .appliesToNext = true};
+    }
+    if (word == u"r!")
+    {
+        return ModifierToken{.modifiers = {.rotateRight = true},
+                             .appliesToNext = true};
+    }
+    if (word == u"c!")
+    {
+        return ModifierToken{.modifiers = {.colorEffect = ImageEffect::Cursed},
+                             .appliesToNext = true};
+    }
+    if (word == u"p!")
+    {
+        return ModifierToken{.modifiers = {.colorEffect = ImageEffect::Party},
+                             .appliesToNext = true};
+    }
+    if (word == u"s!")
+    {
+        return ModifierToken{.modifiers = {.shake = true},
+                             .appliesToNext = true};
+    }
+    if (word == u"z!")
+    {
+        return ModifierToken{.modifiers = {.noSpace = true},
+                             .appliesToNext = true};
+    }
+    if (word == u"ffzW")
+    {
+        return ModifierToken{.modifiers = {.wide = true},
+                             .appliesToNext = false};
+    }
+    if (word == u"ffzX")
+    {
+        return ModifierToken{.modifiers = {.flipHorizontal = true},
+                             .appliesToNext = false};
+    }
+    if (word == u"ffzY")
+    {
+        return ModifierToken{.modifiers = {.flipVertical = true},
+                             .appliesToNext = false};
+    }
+    if (word == u"ffzCursed")
+    {
+        return ModifierToken{.modifiers = {.colorEffect = ImageEffect::Cursed},
+                             .appliesToNext = false};
+    }
+    return std::nullopt;
+}
+
 std::pair<QString, bool> parseMessageType(Communi::TagsRef tags)
 {
     auto msgId = tags.getOrEmpty("msg-id");
@@ -630,6 +707,24 @@ void tokenizeWordsWithEmoji(QStringView text,
             [&](const TokenizedGif &gif) {
                 visitor(gif);
             }});
+}
+
+/// Twitch's "Gigantify an Emote" bits power-up sends a message that consists of
+/// a single Twitch emote. This marks that emote, looking only at the elements
+/// from `start` on.
+void gigantifyEmote(
+    const std::vector<std::unique_ptr<MessageElement>> &elements, size_t start)
+{
+    for (size_t i = start; i < elements.size(); i++)
+    {
+        auto *emote = dynamic_cast<EmoteElement *>(elements[i].get());
+        if (emote != nullptr &&
+            emote->getFlags().has(MessageElementFlag::Emote))
+        {
+            emote->setGigantified(true);
+            return;
+        }
+    }
 }
 
 }  // namespace
@@ -1939,7 +2034,13 @@ std::pair<MessagePtrMut, HighlightAlert> MessageBuilder::makeIrcMessage(
         }
 
         // Add the content.
+        const auto contentStart = builder->elements.size();
         builder.addWords(content, twitchSpecials, textState);
+
+        if (tags.getOrEmpty("msg-id") == "gigantified-emote-message")
+        {
+            gigantifyEmote(builder->elements, contentStart);
+        }
 
         QString stylizedUsername =
             stylizeUsername(builder->loginName, builder.message());
@@ -1991,8 +2092,90 @@ void MessageBuilder::addEmoji(const EmotePtr &emote)
     this->emplace<EmoteElement>(emote, MessageElementFlag::EmojiAll);
 }
 
+void MessageBuilder::flushPendingModifiers(TextState &state)
+{
+    for (const auto &word : state.pendingModifiers)
+    {
+        // Modifiers are emotes themselves, so show them as that
+        if (this->tryAppendEmote(state.twitchChannel, state.userID,
+                                 EmoteNameView{word}))
+        {
+            continue;
+        }
+        this->addWordFromUserMessage(word, state.twitchChannel);
+    }
+    clearPendingModifiers(state);
+}
+
+void MessageBuilder::clearPendingModifiers(TextState &state)
+{
+    state.pendingModifiers.clear();
+    state.pendingModifierFlags = {};
+    state.pendingModifierEmotes.clear();
+}
+
+bool MessageBuilder::applyToPreviousEmote(const EmoteModifiers &modifiers,
+                                          const EmotePtr &modifierEmote)
+{
+    if (this->isEmpty())
+    {
+        return false;
+    }
+
+    auto *previous = dynamic_cast<EmoteElement *>(&this->back());
+    if (previous == nullptr ||
+        !previous->getFlags().has(MessageElementFlag::Emote))
+    {
+        return false;
+    }
+
+    auto merged = previous->modifiers();
+    merged.merge(modifiers);
+    previous->setModifiers(merged);
+    previous->addModifierEmote(modifierEmote);
+    return true;
+}
+
 void MessageBuilder::addTextOrEmote(TextState &state, QString string)
 {
+    // Modifiers are emotes themselves: only treat them as modifiers if the
+    // emote exists (e.g. BTTV/FFZ global emotes are enabled).
+    if (auto modifier = parseModifierToken(string))
+    {
+        if (auto modifierEmote = parseEmote(state.twitchChannel, state.userID,
+                                            EmoteNameView{string}))
+        {
+            if (modifier->appliesToNext)
+            {
+                state.pendingModifiers.append(string);
+                state.pendingModifierFlags.merge(modifier->modifiers);
+                state.pendingModifierEmotes.push_back(modifierEmote);
+                return;
+            }
+            if (state.pendingModifiers.isEmpty() &&
+                this->applyToPreviousEmote(modifier->modifiers, modifierEmote))
+            {
+                return;
+            }
+            // Nothing to modify: falls through and is shown as the normal
+            // emote
+        }
+    }
+
+    if (!state.pendingModifiers.isEmpty())
+    {
+        if (auto emote = parseEmote(state.twitchChannel, state.userID,
+                                    EmoteNameView{string}))
+        {
+            this->appendEmote(emote, state.pendingModifierFlags,
+                              state.pendingModifierEmotes);
+            clearPendingModifiers(state);
+            return;
+        }
+        // Not followed by an emote: show the modifiers as the normal emotes
+        this->flushPendingModifiers(state);
+    }
+
     if (state.hasBits && this->tryAppendCheermote(state, string))
     {
         // This string was parsed as a cheermote
@@ -2807,7 +2990,10 @@ Outcome MessageBuilder::tryAppendEmote(TwitchChannel *twitchChannel,
     return Success;
 }
 
-void MessageBuilder::appendEmote(const EmotePtr &emote)
+void MessageBuilder::appendEmote(const EmotePtr &emote,
+                                 const EmoteModifiers &modifiers,
+                                 const std::vector<EmotePtr> &modifierEmotes,
+                                 bool trailingSpace)
 {
     if (emote->zeroWidth && getSettings()->enableZeroWidthEmotes &&
         !this->isEmpty())
@@ -2843,8 +3029,21 @@ void MessageBuilder::appendEmote(const EmotePtr &emote)
         // No emote to merge with, just show as regular emote
     }
 
-    this->emplace<EmoteElement>(emote, MessageElementFlag::Emote,
-                                this->textColor_);
+    // `z!`: no space between this emote and the previous one
+    if (modifiers.noSpace && !this->isEmpty() &&
+        this->back().getFlags().has(MessageElementFlag::Emote))
+    {
+        this->back().setTrailingSpace(false);
+    }
+
+    auto *element = this->emplace<EmoteElement>(
+        emote, MessageElementFlag::Emote, this->textColor_);
+    element->setModifiers(modifiers);
+    for (const auto &modifierEmote : modifierEmotes)
+    {
+        element->addModifierEmote(modifierEmote);
+    }
+    element->setTrailingSpace(trailingSpace);
 }
 
 void MessageBuilder::addWords(
@@ -2859,17 +3058,30 @@ void MessageBuilder::addWords(
                 this->addTextOrEmote(state, tok.text.toString());
             },
             [&](const TokenizedEmoji &tok) {
+                this->flushPendingModifiers(state);
                 this->addEmoji(tok.emote);
             },
             [&](const TokenizedEmote &tok) {
+                if (!state.pendingModifiers.isEmpty())
+                {
+                    this->appendEmote(tok.emote, state.pendingModifierFlags,
+                                      state.pendingModifierEmotes,
+                                      tok.trailingSpace);
+                    clearPendingModifiers(state);
+                    return;
+                }
                 this->emplace<EmoteElement>(
                         tok.emote, MessageElementFlag::Emote, this->textColor_)
                     ->setTrailingSpace(tok.trailingSpace);
             },
             [&](const TokenizedGif &gif) {
+                this->flushPendingModifiers(state);
                 this->addTwitchGif(gif.id, gif.originalText);
             },
         });
+
+    // Trailing prefix modifiers with no emote after them are normal emotes
+    this->flushPendingModifiers(state);
 }
 
 void MessageBuilder::appendTwitchBadges(Communi::TagsRef tags,

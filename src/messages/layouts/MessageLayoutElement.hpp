@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common/FlagsEnum.hpp"
+#include "messages/ImageEffect.hpp"
 #include "messages/Link.hpp"
 #include "messages/MessageColor.hpp"
 
@@ -100,11 +101,87 @@ private:
     int wordId_ = -1;
 };
 
+/// Visual modifiers for an emote: BTTV's `w!`, `h!`, `v!`, `l!`, `r!`, `c!`,
+/// `p!`, `s!`, `z!` (applied to the next emote) and FFZ's `ffzW`, `ffzX`,
+/// `ffzY`, `ffzCursed` (applied to the previous emote).
+struct EmoteModifiers {
+    bool wide = false;
+    bool flipHorizontal = false;
+    bool flipVertical = false;
+    bool rotateLeft = false;
+    bool rotateRight = false;
+    /// `c!`/`ffzCursed` (black and white) or `p!` (rainbow). Unlike the other
+    /// modifiers, this isn't applied while painting but baked into the image
+    /// once (see `Image::withEffect`).
+    ImageEffect colorEffect = ImageEffect::None;
+    /// `s!`. Baked into the image like `colorEffect` (and combinable with it).
+    bool shake = false;
+    /// `z!`. Removes the space between this emote and the previous one (see
+    /// `MessageBuilder::appendEmote`).
+    bool noSpace = false;
+
+    bool any() const
+    {
+        return this->noSpace || this->wide || this->flipHorizontal ||
+               this->flipVertical || this->rotateLeft || this->rotateRight ||
+               this->colorEffect != ImageEffect::None || this->shake;
+    }
+
+    /// The effect that gets baked into the image of the emote (see
+    /// `Image::withEffect`).
+    ImageEffect imageEffect() const
+    {
+        switch (this->colorEffect)
+        {
+            case ImageEffect::Cursed:
+                return this->shake ? ImageEffect::CursedShake
+                                   : ImageEffect::Cursed;
+            case ImageEffect::Party:
+                return this->shake ? ImageEffect::PartyShake
+                                   : ImageEffect::Party;
+            default:
+                return this->shake ? ImageEffect::Shake : ImageEffect::None;
+        }
+    }
+
+    /// Clockwise rotation in degrees (0, 90, 180 or 270).
+    /// Using both `l!` and `r!` cancels out.
+    int rotation() const
+    {
+        return ((this->rotateRight ? 90 : 0) + (this->rotateLeft ? 270 : 0)) %
+               360;
+    }
+
+    /// Whether the emote is turned on its side (width and height swap)
+    bool isSideways() const
+    {
+        return this->rotation() == 90 || this->rotation() == 270;
+    }
+
+    void merge(const EmoteModifiers &other)
+    {
+        this->wide |= other.wide;
+        this->flipHorizontal |= other.flipHorizontal;
+        this->flipVertical |= other.flipVertical;
+        this->rotateLeft |= other.rotateLeft;
+        this->rotateRight |= other.rotateRight;
+        // Color effects don't combine, the last one wins (`c! p!` is rainbow)
+        if (other.colorEffect != ImageEffect::None)
+        {
+            this->colorEffect = other.colorEffect;
+        }
+        this->shake |= other.shake;
+        this->noSpace |= other.noSpace;
+    }
+};
+
 // IMAGE
 class ImageLayoutElement : public MessageLayoutElement
 {
 public:
     ImageLayoutElement(MessageElement &creator, ImagePtr image, QSizeF size);
+
+    void setModifiers(const EmoteModifiers &modifiers);
 
 protected:
     void addCopyTextToString(QString &str, uint32_t from = 0,
@@ -116,6 +193,7 @@ protected:
     qreal getXFromIndex(size_t index) override;
 
     ImagePtr image_;
+    EmoteModifiers modifiers_;
 };
 
 class LayeredImageLayoutElement : public MessageLayoutElement

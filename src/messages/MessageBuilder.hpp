@@ -165,7 +165,10 @@ public:
     void addWordFromUserMessage(QStringView string,
                                 ChannelChatters *chatters = nullptr);
 
-    void appendEmote(const EmotePtr &emote);
+    void appendEmote(const EmotePtr &emote,
+                     const EmoteModifiers &modifiers = {},
+                     const std::vector<EmotePtr> &modifierEmotes = {},
+                     bool trailingSpace = true);
 
     MessageColor textColor() const;
 
@@ -268,7 +271,22 @@ private:
         bool hasBits = false;
         bool bitsStacked = false;
         int bitsLeft = 0;
+        /// BTTV prefix modifier words (`w!`, `h!`, `v!`) seen right before the
+        /// current word and the modifiers they stand for. They're only
+        /// consumed if an emote follows, otherwise they're flushed as the
+        /// normal emotes.
+        QStringList pendingModifiers;
+        EmoteModifiers pendingModifierFlags;
+        std::vector<EmotePtr> pendingModifierEmotes;
     };
+    /// Adds any buffered modifier words from `state` as normal emotes/text.
+    void flushPendingModifiers(TextState &state);
+    /// Clears the buffered modifier words.
+    static void clearPendingModifiers(TextState &state);
+    /// Applies `modifiers` to the emote directly before the current word (FFZ
+    /// suffix modifiers). Returns false if there is no such emote.
+    bool applyToPreviousEmote(const EmoteModifiers &modifiers,
+                              const EmotePtr &modifierEmote);
     void addEmoji(const EmotePtr &emote);
     void addTextOrEmote(TextState &state, QString string);
 

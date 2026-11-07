@@ -171,6 +171,45 @@ size_t ImageLayoutElement::getSelectionIndexCount() const
     return this->trailingSpace ? 2 : 1;
 }
 
+namespace {
+
+/// Draws `pixmap` into `rect`, mirrored and/or rotated if the modifiers ask
+/// for it. For sideways emotes, `rect` is already the rotated (swapped) size.
+void drawModifiedPixmap(QPainter &painter, const QRectF &rect,
+                        const QPixmap &pixmap, const EmoteModifiers &modifiers)
+{
+    if (!modifiers.flipHorizontal && !modifiers.flipVertical &&
+        modifiers.rotation() == 0)
+    {
+        painter.drawPixmap(rect, pixmap, QRectF());
+        return;
+    }
+
+    // The size of the image before it's rotated
+    auto size = rect.size();
+    if (modifiers.isSideways())
+    {
+        size.transpose();
+    }
+
+    painter.save();
+    painter.translate(rect.center());
+    painter.rotate(modifiers.rotation());
+    painter.scale(modifiers.flipHorizontal ? -1.0 : 1.0,
+                  modifiers.flipVertical ? -1.0 : 1.0);
+    painter.drawPixmap(QRectF(-size.width() / 2, -size.height() / 2,
+                              size.width(), size.height()),
+                       pixmap, QRectF());
+    painter.restore();
+}
+
+}  // namespace
+
+void ImageLayoutElement::setModifiers(const EmoteModifiers &modifiers)
+{
+    this->modifiers_ = modifiers;
+}
+
 void ImageLayoutElement::paint(QPainter &painter,
                                const MessageColors & /*messageColors*/)
 {
@@ -183,7 +222,8 @@ void ImageLayoutElement::paint(QPainter &painter,
     if (pixmap && !this->image_->animated())
     {
         // fourtf: make it use qreal values
-        painter.drawPixmap(QRectF(this->getRect()), *pixmap, QRectF());
+        drawModifiedPixmap(painter, QRectF(this->getRect()), *pixmap,
+                           this->modifiers_);
     }
 }
 

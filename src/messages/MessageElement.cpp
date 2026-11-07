@@ -287,6 +287,39 @@ EmotePtr EmoteElement::getEmote() const
     return this->emote_;
 }
 
+const EmoteModifiers &EmoteElement::modifiers() const
+{
+    return this->modifiers_;
+}
+
+void EmoteElement::setModifiers(const EmoteModifiers &modifiers)
+{
+    this->modifiers_ = modifiers;
+}
+
+void EmoteElement::setGigantified(bool gigantified)
+{
+    this->gigantified_ = gigantified;
+}
+
+const std::vector<EmotePtr> &EmoteElement::modifierEmotes() const
+{
+    return this->modifierEmotes_;
+}
+
+void EmoteElement::addModifierEmote(const EmotePtr &emote)
+{
+    // Using the same modifier twice doesn't do anything extra
+    for (const auto &existing : this->modifierEmotes_)
+    {
+        if (existing->name == emote->name)
+        {
+            return;
+        }
+    }
+    this->modifierEmotes_.push_back(emote);
+}
+
 void EmoteElement::addToContainer(MessageLayoutContainer &container,
                                   const MessageLayoutContext &ctx)
 {
@@ -297,8 +330,11 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
 
     if (ctx.flags.has(MessageElementFlag::EmoteImage))
     {
-        auto image =
-            this->emote_->images.getImageOrLoaded(container.getImageScale());
+        // Gigantified emotes need a higher resolution image, so ask for one
+        const float gigantifyScale =
+            this->gigantified_ ? GIGANTIFIED_EMOTE_SCALE : 1.F;
+        auto image = this->emote_->images.getImageOrLoaded(
+            container.getImageScale() * gigantifyScale);
 
         if (image->isEmpty())
         {
@@ -308,7 +344,16 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
         {
             auto emoteScale = getSettings()->emoteScale.getValue();
 
-            auto size = image->size() * container.getScale() * emoteScale;
+            auto size = image->size() * container.getScale() * emoteScale *
+                        gigantifyScale;
+            if (this->modifiers_.wide)
+            {
+                size.setWidth(size.width() * 2);
+            }
+            if (this->modifiers_.isSideways())
+            {
+                size.transpose();
+            }
 
             container.addElement(this->makeImageLayoutElement(image, size));
             return;
@@ -327,7 +372,14 @@ void EmoteElement::addToContainer(MessageLayoutContainer &container,
 MessageLayoutElement *EmoteElement::makeImageLayoutElement(
     const ImagePtr &image, QSizeF size)
 {
-    return new ImageLayoutElement(*this, image, size);
+    // For `c!`, `p!`, `s!` and `ffzCursed`: this is the (cached) image with
+    // the effect already rendered into it, nothing is filtered or moved while
+    // painting.
+    auto effectImage = image->withEffect(this->modifiers_.imageEffect());
+
+    auto *element = new ImageLayoutElement(*this, effectImage, size);
+    element->setModifiers(this->modifiers_);
+    return element;
 }
 
 void EmoteElement::ensureText(bool asFallback)
@@ -352,6 +404,46 @@ QJsonObject EmoteElement::toJson() const
     auto base = MessageElement::toJson();
     base["type"_L1] = u"EmoteElement"_s;
     base["emote"_L1] = this->emote_->toJson();
+    if (this->modifiers_.wide)
+    {
+        base["wide"_L1] = true;
+    }
+    if (this->modifiers_.flipHorizontal)
+    {
+        base["flipHorizontal"_L1] = true;
+    }
+    if (this->modifiers_.flipVertical)
+    {
+        base["flipVertical"_L1] = true;
+    }
+    if (this->modifiers_.rotateLeft)
+    {
+        base["rotateLeft"_L1] = true;
+    }
+    if (this->modifiers_.rotateRight)
+    {
+        base["rotateRight"_L1] = true;
+    }
+    if (this->modifiers_.colorEffect == ImageEffect::Cursed)
+    {
+        base["cursed"_L1] = true;
+    }
+    if (this->modifiers_.colorEffect == ImageEffect::Party)
+    {
+        base["party"_L1] = true;
+    }
+    if (this->modifiers_.shake)
+    {
+        base["shake"_L1] = true;
+    }
+    if (this->modifiers_.noSpace)
+    {
+        base["noSpace"_L1] = true;
+    }
+    if (this->gigantified_)
+    {
+        base["gigantified"_L1] = true;
+    }
     if (this->textElement_)
     {
         base["text"_L1] = this->textElement_->toJson();
@@ -369,6 +461,9 @@ std::unique_ptr<MessageElement> EmoteElement::clone() const
 {
     auto elem = std::make_unique<EmoteElement>(this->emote_, this->getFlags(),
                                                this->textColor_);
+    elem->modifiers_ = this->modifiers_;
+    elem->modifierEmotes_ = this->modifierEmotes_;
+    elem->gigantified_ = this->gigantified_;
     elem->cloneFrom(*this);
     return elem;
 }
