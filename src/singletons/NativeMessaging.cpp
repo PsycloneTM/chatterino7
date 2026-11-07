@@ -79,6 +79,16 @@ const Config CHROME{
 #endif
 };
 
+// Edge is Chromium-based and uses the same native messaging manifest format
+// as Chrome. The registration path below is Windows-specific.
+#ifdef Q_OS_WIN
+const Config EDGE{
+    .fileName = u"native-messaging-manifest-edge.json"_s,
+    .registryKey =
+        u"HKCU\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.chatterino.chatterino"_s,
+};
+#endif
+
 ExpectedStr<void> registerNmManifest([[maybe_unused]] const Paths &paths,
                                      const Config &config,
                                      const QJsonDocument &document)
@@ -254,7 +264,7 @@ namespace chatterino {
 using namespace chatterino::nm::detail;
 using namespace literals;
 
-bool registerNmHost(const Paths &paths)
+ExpectedStr<void> registerNmHost(const Paths &paths)
 {
     QStringList extensionIDs =
         getSettings()->additionalExtensionIDs.getValue().split(
@@ -263,6 +273,8 @@ bool registerNmHost(const Paths &paths)
     QJsonDocument chromeManifest = buildChromeManifest(extensionIDs);
     QJsonDocument firefoxManifest = buildFirefoxManifest(extensionIDs);
 
+    QStringList errors;
+
     const auto chromeRegistered =
         registerNmManifest(paths, CHROME, chromeManifest);
     if (!chromeRegistered)
@@ -270,6 +282,7 @@ bool registerNmHost(const Paths &paths)
         qCDebug(chatterinoNativeMessage)
             << "Chrome native messaging registration:"
             << chromeRegistered.error();
+        errors.append(u"Chrome: "_s % chromeRegistered.error());
     }
     const auto firefoxRegistered =
         registerNmManifest(paths, FIREFOX, firefoxManifest);
@@ -278,7 +291,18 @@ bool registerNmHost(const Paths &paths)
         qCDebug(chatterinoNativeMessage)
             << "Firefox native messaging registration:"
             << firefoxRegistered.error();
+        errors.append(u"Firefox: "_s % firefoxRegistered.error());
     }
+
+#ifdef Q_OS_WIN
+    const auto edgeRegistered = registerNmManifest(paths, EDGE, chromeManifest);
+    if (!edgeRegistered)
+    {
+        qCDebug(chatterinoNativeMessage)
+            << "Edge native messaging registration:" << edgeRegistered.error();
+        errors.append(u"Edge: "_s % edgeRegistered.error());
+    }
+#endif
 
 #ifndef Q_OS_WIN
     switch (getSettings()->customNativeMessagingManifestFormat.getEnum())
@@ -291,7 +315,11 @@ bool registerNmHost(const Paths &paths)
             break;
     }
 #endif
-    return bool(chromeRegistered) && bool(firefoxRegistered);
+    if (!errors.isEmpty())
+    {
+        return makeUnexpected(errors.join('\n'));
+    }
+    return {};
 }
 
 void registerNmHost(Modes modes, const Paths &paths)
