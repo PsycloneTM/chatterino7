@@ -1,17 +1,20 @@
 #pragma once
 
+#include "providers/dgg/DggFrame.hpp"
+
 #include <pajlada/signals/signalholder.hpp>
 #include <QObject>
 
 #include <chrono>
 #include <memory>
+#include <vector>
 
 namespace chatterino {
 
 class Channel;
+class DggAssets;
 class DggChannel;
 class DggWebSocket;
-struct DggFrame;
 
 /// Owns the destiny.gg chat channel and its websocket.
 ///
@@ -41,9 +44,15 @@ private:
 
     void onSocketOpened();
     void onSocketClosed(std::chrono::milliseconds retryIn);
+    /// Entry point for frames from the websocket. Holds them back until the
+    /// emote and flair manifests are loaded, so the backlog isn't built
+    /// without emotes.
     void onFrame(const DggFrame &frame);
+    void handleFrame(const DggFrame &frame);
 
     std::weak_ptr<DggChannel> channel_;
+    std::unique_ptr<DggAssets> assets_;
+    std::vector<DggFrame> pendingFrames_;
     std::unique_ptr<DggWebSocket> socket_;
     pajlada::Signals::SignalHolder signalHolder_;
 };

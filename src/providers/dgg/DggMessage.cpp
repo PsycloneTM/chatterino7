@@ -116,6 +116,7 @@ DggUser DggUser::fromJson(const QJsonObject &obj)
                        .toObject()
                        .value("tier"_L1)
                        .toInt();
+    user.patreonMember = obj.value("patreonMember"_L1).toBool();
     return user;
 }
 

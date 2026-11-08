@@ -2,6 +2,7 @@
 
 #include "common/QLogging.hpp"
 #include "debug/AssertInGuiThread.hpp"
+#include "providers/dgg/DggAssets.hpp"
 #include "providers/dgg/DggChannel.hpp"
 #include "providers/dgg/DggFrame.hpp"
 #include "providers/dgg/DggMessage.hpp"
@@ -15,7 +16,19 @@ namespace chatterino {
 
 using namespace Qt::Literals;
 
-DggChatServer::DggChatServer() = default;
+DggChatServer::DggChatServer()
+    : assets_(std::make_unique<DggAssets>())
+{
+    this->signalHolder_.managedConnect(this->assets_->ready, [this] {
+        // Everything held back while the manifests loaded, in arrival order
+        auto frames = std::move(this->pendingFrames_);
+        this->pendingFrames_.clear();
+        for (const auto &frame : frames)
+        {
+            this->handleFrame(frame);
+        }
+    });
+}
 
 DggChatServer::~DggChatServer() = default;
 
@@ -70,6 +83,7 @@ void DggChatServer::ensureConnected(const std::shared_ptr<DggChannel> &chan)
     if (!this->socket_->isStarted())
     {
         chan->addSystemMessage(u"Connecting to destiny.gg chat..."_s);
+        this->assets_->load();
         this->socket_->start();
     }
 }
@@ -110,6 +124,16 @@ void DggChatServer::onSocketClosed(std::chrono::milliseconds retryIn)
 
 void DggChatServer::onFrame(const DggFrame &frame)
 {
+    if (!this->assets_->isReady())
+    {
+        this->pendingFrames_.push_back(frame);
+        return;
+    }
+    this->handleFrame(frame);
+}
+
+void DggChatServer::handleFrame(const DggFrame &frame)
+{
     auto chan = this->channel_.lock();
     if (!chan)
     {
@@ -134,7 +158,8 @@ void DggChatServer::onFrame(const DggFrame &frame)
         }
 
         chan->addMessage(
-            DggMessageBuilder::makeChatMessage(chan.get(), *msg, frame.backlog),
+            DggMessageBuilder::makeChatMessage(chan.get(), *msg, frame.backlog,
+                                               *this->assets_),
             MessageContext::Original);
     }
     else if (name == "MUTE"_L1 || name == "UNMUTE"_L1 || name == "BAN"_L1 ||
@@ -197,6 +222,12 @@ void DggChatServer::onFrame(const DggFrame &frame)
     else if (name == "ERR"_L1)
     {
         chan->addSystemMessage(dggErrorText(obj));
+    }
+    else if (name == "REFRESHCHATASSETS"_L1)
+    {
+        // New emotes or flairs were published. Lines already shown keep the
+        // old images.
+        this->assets_->load();
     }
     else if (name == "JOIN"_L1 || name == "QUIT"_L1 || name == "USERSDELTA"_L1)
     {

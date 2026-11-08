@@ -2,6 +2,7 @@
 
 #include "common/LinkParser.hpp"
 #include "messages/MessageElement.hpp"
+#include "providers/dgg/DggAssets.hpp"
 #include "providers/dgg/DggChannel.hpp"
 #include "providers/dgg/DggMessage.hpp"
 #include "singletons/Settings.hpp"
@@ -13,9 +14,22 @@ using namespace chatterino;
 /// chat-gui's `$color-green-text`.
 const QColor GREENTEXT_COLOR{0x6c, 0xa5, 0x28};
 
-/// Adds one word of user text. Phase 5 puts the emote lookup here.
-void appendWord(DggMessageBuilder &builder, QStringView word, bool greentext)
+/// Adds one word of user text: an emote if the word is one the author may
+/// use, otherwise a link or plain text.
+void appendWord(DggMessageBuilder &builder, QStringView word,
+                const DggUser &user, bool greentext, const DggAssets &assets)
 {
+    const MessageColor textColor =
+        greentext ? MessageColor(GREENTEXT_COLOR) : MessageColor::Text;
+
+    if (auto emote = assets.emoteFor(word, user))
+    {
+        // textColor is only used if the image can't be shown
+        builder.emplace<EmoteElement>(emote, MessageElementFlag::Emote,
+                                      textColor);
+        return;
+    }
+
     if (!greentext)
     {
         builder.addWordFromUserMessage(word);
@@ -30,7 +44,7 @@ void appendWord(DggMessageBuilder &builder, QStringView word, bool greentext)
         return;
     }
     builder.emplace<TextElement>(word.toString(), MessageElementFlag::Text,
-                                 MessageColor(GREENTEXT_COLOR));
+                                 textColor);
 }
 
 QString displayedNick(const QString &nick)
@@ -72,7 +86,8 @@ void DggMessageBuilder::markBacklog()
 
 MessagePtrMut DggMessageBuilder::makeChatMessage(DggChannel *channel,
                                                  const DggChatMessage &msg,
-                                                 bool backlog)
+                                                 bool backlog,
+                                                 const DggAssets &assets)
 {
     DggMessageBuilder builder(channel, msg.time());
     builder->channelName = channel->getName();
@@ -90,16 +105,29 @@ MessagePtrMut DggMessageBuilder::makeChatMessage(DggChannel *channel,
         builder->flags.set(MessageFlag::Action);
     }
 
-    // No nick colour or flairs yet, that's phase 5. Linking the nick to the
-    // user popup waits for phase 7: the popup only knows Twitch and Kick.
+    // Flairs first, like chat-gui. Linking the nick to the user popup waits
+    // for phase 7: the popup only knows Twitch and Kick.
+    for (const auto &badge : assets.badgesFor(msg.user))
+    {
+        builder.emplace<BadgeElement>(badge, MessageElementFlag::BadgeVanity);
+    }
+
+    const auto nickColor = assets.nickColorFor(msg.user);
+    if (nickColor)
+    {
+        builder->usernameColor = *nickColor;
+    }
+
     const QString nick = displayedNick(msg.user.nick);
     QString usernameText = nick;
     if (!msg.isAction)
     {
         usernameText.append(u':');
     }
-    builder.emplace<TextElement>(usernameText, MessageElementFlag::Username,
-                                 MessageColor::Text, FontStyle::ChatMediumBold);
+    builder.emplace<TextElement>(
+        usernameText, MessageElementFlag::Username,
+        nickColor ? MessageColor(*nickColor) : MessageColor::Text,
+        FontStyle::ChatMediumBold);
 
     const QString simplified = msg.text.simplified();
     QString messageText;
@@ -110,7 +138,7 @@ MessagePtrMut DggMessageBuilder::makeChatMessage(DggChannel *channel,
             messageText.append(u' ');
         }
         messageText.append(word);
-        appendWord(builder, word, msg.greentext);
+        appendWord(builder, word, msg.user, msg.greentext, assets);
     }
 
     builder->messageText = messageText;

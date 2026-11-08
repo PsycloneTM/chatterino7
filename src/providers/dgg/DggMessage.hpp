@@ -26,6 +26,9 @@ struct DggUser {
     /// 0 if the user isn't subscribed.
     int subTier = 0;
 
+    /// Patreon members can use the Patreon-only emotes.
+    bool patreonMember = false;
+
     static DggUser fromJson(const QJsonObject &obj);
 
     bool hasRole(const QString &role) const;

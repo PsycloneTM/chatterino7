@@ -8,6 +8,7 @@
 
 namespace chatterino {
 
+class DggAssets;
 class DggChannel;
 struct DggChatMessage;
 struct DggUser;
@@ -25,11 +26,13 @@ public:
                       const QDateTime &time);
     DggMessageBuilder(DggChannel *channel, const QDateTime &time);
 
-    /// A chat line: timestamp, nick, and the text with links. Greentext is
-    /// coloured, `/me` lines have no colon after the nick.
+    /// A chat line: timestamp, flair badges, nick (in its flair colour) and
+    /// the text with emotes and links. Greentext is coloured, `/me` lines
+    /// have no colon after the nick.
     static MessagePtrMut makeChatMessage(DggChannel *channel,
                                          const DggChatMessage &msg,
-                                         bool backlog);
+                                         bool backlog,
+                                         const DggAssets &assets);
 
     /// A system line with the given time. `moderation` marks it as a
     /// moderation action (mutes, bans, sub-only mode).

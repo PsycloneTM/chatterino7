@@ -447,12 +447,16 @@ set(SOURCE_FILES
         providers/colors/ColorProvider.cpp
         providers/colors/ColorProvider.hpp
 
+        providers/dgg/DggAssets.cpp
+        providers/dgg/DggAssets.hpp
         providers/dgg/DggChannel.cpp
         providers/dgg/DggChannel.hpp
         providers/dgg/DggChatServer.cpp
         providers/dgg/DggChatServer.hpp
         providers/dgg/DggFrame.cpp
         providers/dgg/DggFrame.hpp
+        providers/dgg/DggManifest.cpp
+        providers/dgg/DggManifest.hpp
         providers/dgg/DggMessage.cpp
         providers/dgg/DggMessage.hpp
         providers/dgg/DggMessageBuilder.cpp
