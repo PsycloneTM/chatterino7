@@ -2,6 +2,11 @@
 
 #include "common/Channel.hpp"
 
+#include <QSet>
+#include <QString>
+
+#include <deque>
+
 namespace chatterino {
 
 /// The single destiny.gg chat room.
@@ -25,6 +30,21 @@ public:
 
     bool canSendMessage() const override;
     bool isWritable() const override;
+
+    /// Remembers that an event with this key was shown.
+    ///
+    /// Returns false if it was already seen, so the caller can skip it. This
+    /// is what keeps the backlog the server replays after a reconnect from
+    /// showing messages twice. Only the most recent keys are kept.
+    ///
+    /// Must be called from the GUI thread.
+    bool markSeen(const QString &key);
+
+private:
+    static constexpr size_t MAX_SEEN_KEYS = 2000;
+
+    QSet<QString> seen_;
+    std::deque<QString> seenOrder_;
 };
 
 }  // namespace chatterino

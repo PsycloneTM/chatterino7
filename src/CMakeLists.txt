@@ -453,6 +453,10 @@ set(SOURCE_FILES
         providers/dgg/DggChatServer.hpp
         providers/dgg/DggFrame.cpp
         providers/dgg/DggFrame.hpp
+        providers/dgg/DggMessage.cpp
+        providers/dgg/DggMessage.hpp
+        providers/dgg/DggMessageBuilder.cpp
+        providers/dgg/DggMessageBuilder.hpp
         providers/dgg/DggWebSocket.cpp
         providers/dgg/DggWebSocket.hpp
 

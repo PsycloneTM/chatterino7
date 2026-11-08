@@ -34,4 +34,21 @@ bool DggChannel::isWritable() const
     return false;
 }
 
+bool DggChannel::markSeen(const QString &key)
+{
+    if (this->seen_.contains(key))
+    {
+        return false;
+    }
+
+    this->seen_.insert(key);
+    this->seenOrder_.push_back(key);
+    while (this->seenOrder_.size() > MAX_SEEN_KEYS)
+    {
+        this->seen_.remove(this->seenOrder_.front());
+        this->seenOrder_.pop_front();
+    }
+    return true;
+}
+
 }  // namespace chatterino
