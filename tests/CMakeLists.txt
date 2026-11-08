@@ -13,6 +13,7 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/NetworkRequest.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/NetworkResult.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ChatterSet.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/DggEmoteCss.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/DggFrame.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/DggManifest.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/DggMessage.cpp
@@ -65,6 +66,7 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/NotificationController.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ImageUploader.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/Image.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/SpriteSheet.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/TwitchChannel.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/TwitchUserColor.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/FunctionRef.cpp

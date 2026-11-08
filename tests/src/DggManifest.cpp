@@ -68,16 +68,20 @@ TEST(DggManifest, EmoteWithoutImageIsKept)
 
 TEST(DggManifest, ParsesFlairs)
 {
+    // Entries copied from the real manifest
     auto flairs = parseDggFlairs(arr(R"([
         {"label":"Micro","name":"flair17","description":"May or may not have a small donger",
          "hidden":true,"priority":1,"color":"#FCE205","rainbowColor":false,
-         "image":[{"url":"https://cdn.destiny.gg/4.50.1/flairs/x.png","name":"x.png","mime":"image/png","height":18,"width":20}]},
+         "image":[{"url":"https://cdn.destiny.gg/4.50.1/flairs/5d90d259a2c85.png","name":"5d90d259a2c85.png","mime":"image/png","height":18,"width":20}]},
         {"label":"Admin","name":"admin","description":null,"hidden":true,
-         "priority":1,"color":null,"rainbowColor":true,"image":[]},
+         "priority":1,"color":"#EE1F1F","rainbowColor":false,
+         "image":[{"url":"https://cdn.destiny.gg/4.50.1/flairs/admin.png","name":"admin.png","mime":"image/png","height":16,"width":16}]},
+        {"label":"Anything Else? Subscriber Tier 5","name":"flair33","description":"",
+         "hidden":false,"priority":3,"color":"#eb79da","rainbowColor":true},
         {"label":"nameless"}
     ])"));
 
-    ASSERT_EQ(flairs.size(), 2U);
+    ASSERT_EQ(flairs.size(), 3U);
 
     EXPECT_EQ(flairs[0].name, "flair17");
     EXPECT_EQ(flairs[0].label, "Micro");
@@ -88,15 +92,20 @@ TEST(DggManifest, ParsesFlairs)
     EXPECT_FALSE(flairs[0].rainbowColor);
     EXPECT_EQ(flairs[0].image.width, 20);
     EXPECT_EQ(flairs[0].image.height, 18);
-    EXPECT_TRUE(flairs[0].colorsNick());
 
-    // null description and null colour become empty strings
+    // null description becomes an empty string; Admin is plain red
     EXPECT_EQ(flairs[1].name, "admin");
     EXPECT_TRUE(flairs[1].description.isEmpty());
-    EXPECT_TRUE(flairs[1].color.isEmpty());
-    EXPECT_TRUE(flairs[1].rainbowColor);
-    EXPECT_TRUE(flairs[1].colorsNick());
-    EXPECT_FALSE(flairs[1].image.isValid());
+    EXPECT_EQ(flairs[1].color, "#EE1F1F");
+    EXPECT_FALSE(flairs[1].rainbowColor);
+    EXPECT_EQ(flairs[1].image.width, 16);
+
+    // Tier 5 has a colour and is rainbow; this one has no image
+    EXPECT_EQ(flairs[2].name, "flair33");
+    EXPECT_EQ(flairs[2].color, "#eb79da");
+    EXPECT_TRUE(flairs[2].rainbowColor);
+    EXPECT_TRUE(flairs[2].colorsNick());
+    EXPECT_FALSE(flairs[2].image.isValid());
 }
 
 TEST(DggManifest, EmotePermissions)

@@ -446,6 +446,24 @@ ImagePtr Image::fromUrl(const Url &url, qreal scale, QSize expectedSize)
     return shared;
 }
 
+ImagePtr Image::fromSpriteSheet(const Url &url, const SpriteSheetSpec &spec)
+{
+    static std::unordered_map<std::string, std::weak_ptr<Image>> cache;
+    static std::mutex mutex;
+
+    std::lock_guard<std::mutex> lock(mutex);
+
+    const auto key = (url.string + QChar(u'#') + spec.cacheKey()).toStdString();
+    auto shared = cache[key].lock();
+
+    if (!shared)
+    {
+        cache[key] = shared = ImagePtr(new Image(url, spec));
+    }
+
+    return shared;
+}
+
 ImagePtr Image::fromAutoscaledUrl(const Url &url, uint16_t autoScale)
 {
     auto shared = Image::fromUrl(url, 1.0, {autoScale, autoScale});
@@ -514,6 +532,16 @@ Image::Image(const Url &url, qreal scale, QSize expectedSize)
 Image::Image(qreal scale)
     : scale_(scale)
     , frames_(std::make_unique<detail::Frames>())
+{
+}
+
+Image::Image(const Url &url, SpriteSheetSpec spec)
+    : url_(url)
+    , scale_(1)
+    , expectedSize_(spec.frameSize)
+    , shouldLoad_(true)
+    , frames_(std::make_unique<detail::Frames>())
+    , sprite_(std::move(spec))
 {
 }
 
@@ -699,6 +727,43 @@ void Image::actuallyLoad()
                 << "Error: image has less than 1 frame " << shared->url().string
                 << ": " << reader.errorString();
             shared->empty_ = true;
+            return;
+        }
+
+        if (shared->sprite_)
+        {
+            // A sprite sheet is decoded as a whole, and the frames are cut
+            // out of it. That's done here (and not on the GUI thread) because
+            // it can be a lot of pixels.
+            const QImage sheet = reader.read();
+            if (sheet.isNull())
+            {
+                qCDebug(chatterinoImage)
+                    << "Error: sprite sheet can't be decoded"
+                    << shared->url().string << ": " << reader.errorString();
+                shared->empty_ = true;
+                return;
+            }
+
+            auto sliced = sliceSpriteSheet(sheet, *shared->sprite_,
+                                           Image::maxBytesRam);
+            if (sliced.empty())
+            {
+                shared->empty_ = true;
+                return;
+            }
+
+            QList<detail::Frame> frames;
+            frames.reserve(static_cast<qsizetype>(sliced.size()));
+            for (auto &frame : sliced)
+            {
+                frames.append(detail::Frame{
+                    .image = QPixmap::fromImage(std::move(frame.image)),
+                    .duration = frame.durationMs > 0 ? frame.durationMs : 100,
+                });
+            }
+
+            assignFrames(shared, std::move(frames));
             return;
         }
 

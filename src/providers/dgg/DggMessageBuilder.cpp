@@ -17,12 +17,13 @@ const QColor GREENTEXT_COLOR{0x6c, 0xa5, 0x28};
 /// Adds one word of user text: an emote if the word is one the author may
 /// use, otherwise a link or plain text.
 void appendWord(DggMessageBuilder &builder, QStringView word,
-                const DggUser &user, bool greentext, const DggAssets &assets)
+                const DggUser &user, const DggEmoteContext &emoteContext,
+                bool greentext, const DggAssets &assets)
 {
     const MessageColor textColor =
         greentext ? MessageColor(GREENTEXT_COLOR) : MessageColor::Text;
 
-    if (auto emote = assets.emoteFor(word, user))
+    if (auto emote = assets.emoteFor(word, user, emoteContext))
     {
         // textColor is only used if the image can't be shown
         builder.emplace<EmoteElement>(emote, MessageElementFlag::Emote,
@@ -134,6 +135,10 @@ MessagePtrMut DggMessageBuilder::makeChatMessage(DggChannel *channel,
         nickElement->addFlags(MessageElementFlag::DggRainbowUsername);
     }
 
+    // Emotes look different depending on who says them
+    const auto emoteContext =
+        assets.emoteContextFor(msg.user, msg.isAction, backlog);
+
     const QString simplified = msg.text.simplified();
     QString messageText;
     for (auto word : QStringView(simplified).tokenize(u' ', Qt::SkipEmptyParts))
@@ -143,7 +148,8 @@ MessagePtrMut DggMessageBuilder::makeChatMessage(DggChannel *channel,
             messageText.append(u' ');
         }
         messageText.append(word);
-        appendWord(builder, word, msg.user, msg.greentext, assets);
+        appendWord(builder, word, msg.user, emoteContext, msg.greentext,
+                   assets);
     }
 
     builder->messageText = messageText;

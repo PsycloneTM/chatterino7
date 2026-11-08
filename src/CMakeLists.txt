@@ -379,6 +379,8 @@ set(SOURCE_FILES
         messages/Image.hpp
         messages/ImageSet.cpp
         messages/ImageSet.hpp
+        messages/SpriteSheet.cpp
+        messages/SpriteSheet.hpp
         messages/Link.cpp
         messages/Link.hpp
         messages/Message.cpp
@@ -453,6 +455,8 @@ set(SOURCE_FILES
         providers/dgg/DggChannel.hpp
         providers/dgg/DggChatServer.cpp
         providers/dgg/DggChatServer.hpp
+        providers/dgg/DggEmoteCss.cpp
+        providers/dgg/DggEmoteCss.hpp
         providers/dgg/DggFrame.cpp
         providers/dgg/DggFrame.hpp
         providers/dgg/DggManifest.cpp

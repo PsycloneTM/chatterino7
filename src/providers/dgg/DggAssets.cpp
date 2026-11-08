@@ -20,23 +20,39 @@ using namespace Qt::Literals;
 constexpr auto EMOTES_URL = "https://cdn.destiny.gg/emotes/emotes.json"_L1;
 constexpr auto FLAIRS_URL = "https://cdn.destiny.gg/flairs/flairs.json"_L1;
 
+/// chat-gui loads it from the same place as the manifest.
+constexpr auto EMOTES_CSS_URL = "https://cdn.destiny.gg/emotes/emotes.css"_L1;
+
 constexpr int REQUEST_TIMEOUT_MS = 15000;
 
 /// DGG has a single resolution per image, so there's no 2x/3x set. The image
 /// is drawn at the size the manifest gives (scale 1). `Image::fromUrl` caches
 /// by URL, and the URLs contain the asset version, so a new manifest version
 /// never shows a stale image.
-ImageSet imageSetFor(const DggImageRef &ref)
+QSize sheetSizeOf(const DggImageRef &ref)
 {
-    QSize size;
     if (ref.width > 0 && ref.height > 0)
     {
-        size = QSize(ref.width, ref.height);
+        return QSize(ref.width, ref.height);
+    }
+    return {};
+}
+
+/// `style` is what the stylesheet says about the emote. If it shows a part of
+/// the image (a frame of a sprite sheet, or one variant of several) or
+/// colours it, the image is a sprite sheet that is cut into frames. Otherwise,
+/// the image is shown as it is (which keeps the animation of a GIF).
+ImageSet imageSetFor(const DggImageRef &ref, const DggEmoteStyle &style)
+{
+    const QSize size = sheetSizeOf(ref);
+    if (style.valid && !style.isWholeImage(size))
+    {
+        return ImageSet(Image::fromSpriteSheet(Url{ref.url}, style.sprite));
     }
     return ImageSet(Image::fromUrl(Url{ref.url}, 1.0, size));
 }
 
-EmotePtr makeEmote(const DggEmoteDef &def)
+EmotePtr makeEmote(const DggEmoteDef &def, const DggEmoteStyle &style)
 {
     QString tooltip = def.prefix.toHtmlEscaped() + u"<br>DGG Emote"_s;
     if (def.patreonOnly)
@@ -54,7 +70,7 @@ EmotePtr makeEmote(const DggEmoteDef &def)
 
     return std::make_shared<const Emote>(Emote{
         .name = EmoteName{def.prefix},
-        .images = imageSetFor(def.image),
+        .images = imageSetFor(def.image, style),
         .tooltip = Tooltip{tooltip},
         .author = EmoteAuthor{def.creator},
     });
@@ -70,7 +86,7 @@ EmotePtr makeBadge(const DggFlairDef &def)
 
     return std::make_shared<const Emote>(Emote{
         .name = EmoteName{def.label},
-        .images = imageSetFor(def.image),
+        .images = imageSetFor(def.image, {}),
         .tooltip = Tooltip{tooltip},
     });
 }
@@ -95,7 +111,7 @@ void DggAssets::load()
         return;
     }
     this->loading_ = true;
-    this->pending_ = 2;
+    this->pending_ = 3;
 
     this->fetch(EMOTES_URL, [this](const QJsonArray &json) {
         this->applyEmotes(json);
@@ -103,6 +119,41 @@ void DggAssets::load()
     this->fetch(FLAIRS_URL, [this](const QJsonArray &json) {
         this->applyFlairs(json);
     });
+    this->fetchText(EMOTES_CSS_URL, [this](const QString &css) {
+        this->applyCss(css);
+    });
+}
+
+void DggAssets::fetchText(const QString &url,
+                          std::function<void(const QString &)> onData)
+{
+    std::weak_ptr<bool> weak = this->alive_;
+
+    NetworkRequest(QUrl(url))
+        .timeout(REQUEST_TIMEOUT_MS)
+        .onSuccess([weak, onData = std::move(onData)](NetworkResult result) {
+            if (weak.expired())
+            {
+                return;
+            }
+            onData(QString::fromUtf8(result.getData()));
+        })
+        .onError([weak, url](NetworkResult result) {
+            if (weak.expired())
+            {
+                return;
+            }
+            qCWarning(chatterinoDgg)
+                << "Failed to load" << url << result.formatError();
+        })
+        .finally([weak, this] {
+            if (weak.expired())
+            {
+                return;
+            }
+            this->onFetchFinished();
+        })
+        .execute();
 }
 
 void DggAssets::fetch(const QString &url,
@@ -171,14 +222,60 @@ void DggAssets::applyEmotes(const QJsonArray &json)
         {
             continue;
         }
-        auto emote = makeEmote(def);
         auto prefix = def.prefix;
-        emotes.emplace(std::move(prefix),
-                       EmoteEntry{.def = std::move(def), .emote = emote});
+        emotes.emplace(std::move(prefix), EmoteEntry{.def = std::move(def)});
     }
 
     qCDebug(chatterinoDgg) << "Loaded" << emotes.size() << "emotes";
     this->emotes_ = std::move(emotes);
+
+    // The emotes look different with and without the stylesheet, and it may
+    // have arrived first.
+    this->rebuildEmotes();
+}
+
+void DggAssets::applyCss(const QString &css)
+{
+    auto parsed = DggEmoteCss::parse(css);
+    if (parsed.isEmpty())
+    {
+        // Keep what we had, like for the manifests.
+        qCWarning(chatterinoDgg) << "The emote stylesheet has no usable rules";
+        return;
+    }
+
+    const auto &stats = parsed.stats();
+    qCDebug(chatterinoDgg) << "Loaded the emote stylesheet:" << stats.rules
+                           << "rules for" << stats.emotes << "emotes,"
+                           << stats.keyframes << "keyframes,"
+                           << stats.unsupportedRules << "rules skipped";
+    for (const auto &reason : parsed.describeUnsupported())
+    {
+        qCDebug(chatterinoDgg) << "  skipped:" << reason;
+    }
+
+    this->css_ = std::move(parsed);
+    this->rebuildEmotes();
+}
+
+void DggAssets::rebuildEmotes()
+{
+    this->styled_.clear();
+
+    for (auto &item : this->emotes_)
+    {
+        auto &entry = item.second;
+
+        DggEmoteStyle style;
+        entry.contextual = false;
+        if (this->css_.hasEmote(entry.def.prefix))
+        {
+            style = this->css_.resolve(entry.def.prefix, {},
+                                       sheetSizeOf(entry.def.image));
+            entry.contextual = this->css_.dependsOnContext(entry.def.prefix);
+        }
+        entry.emote = makeEmote(entry.def, style);
+    }
 }
 
 void DggAssets::applyFlairs(const QJsonArray &json)
@@ -206,16 +303,63 @@ void DggAssets::applyFlairs(const QJsonArray &json)
 
 EmotePtr DggAssets::emoteFor(QStringView word, const DggUser &user) const
 {
+    return this->emoteFor(word, user,
+                          this->emoteContextFor(user, false, false));
+}
+
+EmotePtr DggAssets::emoteFor(QStringView word, const DggUser &user,
+                             const DggEmoteContext &context) const
+{
     auto it = this->emotes_.find(word);
     if (it == this->emotes_.end())
     {
         return nullptr;
     }
-    if (!dggCanUseEmote(it->second.def, user))
+
+    const auto &entry = it->second;
+    if (!dggCanUseEmote(entry.def, user))
     {
         return nullptr;
     }
-    return it->second.emote;
+    if (!entry.contextual)
+    {
+        return entry.emote;
+    }
+
+    const auto style = this->css_.resolve(entry.def.prefix, context,
+                                          sheetSizeOf(entry.def.image));
+    const QString key = entry.def.prefix + QChar(u'|') + style.cacheKey();
+    if (auto cached = this->styled_.find(key); cached != this->styled_.end())
+    {
+        return cached->second;
+    }
+
+    auto emote = makeEmote(entry.def, style);
+    this->styled_.emplace(key, emote);
+    return emote;
+}
+
+DggEmoteContext DggAssets::emoteContextFor(const DggUser &user, bool isAction,
+                                           bool backlog) const
+{
+    DggEmoteContext context;
+    context.username = user.nick.toLower();
+    context.messageClasses = user.features;
+    if (isAction)
+    {
+        context.messageClasses.append(QStringLiteral("msg-me"));
+    }
+    if (backlog)
+    {
+        context.messageClasses.append(QStringLiteral("msg-historical"));
+    }
+
+    // The nick only gets the class of the flair that colours it
+    if (const auto *flair = dggNickColorFlair(this->flairs_, user.features))
+    {
+        context.nickColorFlair = flair->name;
+    }
+    return context;
 }
 
 std::vector<EmotePtr> DggAssets::badgesFor(const DggUser &user) const

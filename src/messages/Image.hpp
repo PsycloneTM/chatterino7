@@ -5,6 +5,7 @@
 #pragma once
 
 #include "common/Aliases.hpp"
+#include "messages/SpriteSheet.hpp"
 #include "util/DebugCount.hpp"
 
 #include <QList>
@@ -94,6 +95,16 @@ public:
 
     static ImagePtr fromAutoscaledUrl(const Url &url, uint16_t autoScale);
 
+    /// An image that shows the frames `spec` describes, cut out of the sheet
+    /// at `url` (one image holding many frames side by side, or several
+    /// variants of an emote). The sheet is downloaded and decoded once per
+    /// `Image`, and the frames are cut out of it and animated like the frames
+    /// of a GIF. Images with the same URL and spec are shared.
+    ///
+    /// Only the first frame of the file at `url` is used, so this isn't for
+    /// animated files.
+    static ImagePtr fromSpriteSheet(const Url &url, const SpriteSheetSpec &spec);
+
     const Url &url() const;
     bool loaded() const;
     // either returns the current pixmap, or triggers loading it (lazy loading)
@@ -112,6 +123,7 @@ private:
     Image();
     Image(const Url &url, qreal scale, QSize expectedSize);
     Image(qreal scale);
+    Image(const Url &url, SpriteSheetSpec spec);
 
     void setPixmap(const QPixmap &pixmap);
     void actuallyLoad();
@@ -142,6 +154,9 @@ private:
 
     // gui thread only
     std::unique_ptr<detail::Frames> frames_;
+
+    /// If set, `url_` is a sprite sheet that is cut into frames on load.
+    std::optional<SpriteSheetSpec> sprite_;
 
     friend class ImageExpirationPool;
     friend void detail::assignFrames(std::weak_ptr<Image>,
