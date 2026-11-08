@@ -1484,6 +1484,7 @@ SplitDescriptor Split::buildDescriptor() const
     {
         case Channel::Type::Twitch:
         case Channel::Type::Misc:
+        case Channel::Type::Dgg:
             descriptor.channelName_ = chan.get()->getName();
             break;
 

@@ -383,6 +383,8 @@ bool platformMatches(MessagePlatform lhs, MultiChannel::Platform rhs) noexcept
             return rhs == MultiChannel::Platform::Twitch;
         case MessagePlatform::Kick:
             return rhs == MultiChannel::Platform::Kick;
+        case MessagePlatform::Dgg:
+            return false;  // DGG isn't supported in MultiChannel
     }
     return false;
 }

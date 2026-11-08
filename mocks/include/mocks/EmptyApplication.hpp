@@ -320,6 +320,14 @@ public:
         return nullptr;
     }
 
+    DggChatServer *getDggChatServer() override
+    {
+        assert(false &&
+               "EmptyApplication::getDggChatServer was called without "
+               "being initialized");
+        return nullptr;
+    }
+
     QTemporaryDir settingsDir;
     Args args_;
     Modes modes_{args_};

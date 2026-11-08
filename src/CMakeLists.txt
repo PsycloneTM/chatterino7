@@ -447,6 +447,11 @@ set(SOURCE_FILES
         providers/colors/ColorProvider.cpp
         providers/colors/ColorProvider.hpp
 
+        providers/dgg/DggChannel.cpp
+        providers/dgg/DggChannel.hpp
+        providers/dgg/DggChatServer.cpp
+        providers/dgg/DggChatServer.hpp
+
         providers/emoji/Emojis.cpp
         providers/emoji/Emojis.hpp
         providers/emoji/EmojiStyle.hpp

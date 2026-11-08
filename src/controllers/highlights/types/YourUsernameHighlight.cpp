@@ -79,6 +79,9 @@ HighlightCheck YourUsernameHighlight::buildCheck() const
                     }
                 }
                 break;
+                case MessagePlatform::Dgg:
+                    // No DGG account yet, so there's no username to match
+                    return std::nullopt;
             }
 
             return highlight.outcome.makeSimpleResult<H>();

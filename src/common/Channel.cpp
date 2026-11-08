@@ -60,6 +60,10 @@ Channel::Channel(const QString &name, Type type)
     {
         this->messagePlatform_ = MessagePlatform::Kick;
     }
+    else if (this->isDggChannel())
+    {
+        this->messagePlatform_ = MessagePlatform::Dgg;
+    }
     else
     {
         this->messagePlatform_ = MessagePlatform::AnyOrTwitch;
@@ -103,6 +107,11 @@ bool Channel::isTwitchChannel() const
 bool Channel::isKickChannel() const
 {
     return this->type_ == Type::Kick;
+}
+
+bool Channel::isDggChannel() const
+{
+    return this->type_ == Type::Dgg;
 }
 
 bool Channel::isTwitchOrKickChannel() const

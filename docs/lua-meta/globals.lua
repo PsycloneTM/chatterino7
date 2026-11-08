@@ -54,6 +54,7 @@ c2.ChannelType = {
     TwitchAutomod = {}, ---@type c2.ChannelType.TwitchAutomod
     TwitchEnd = {}, ---@type c2.ChannelType.TwitchEnd
     Kick = {}, ---@type c2.ChannelType.Kick
+    Dgg = {}, ---@type c2.ChannelType.Dgg
     Misc = {}, ---@type c2.ChannelType.Misc
     Multi = {}, ---@type c2.ChannelType.Multi
 }

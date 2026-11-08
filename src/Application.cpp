@@ -20,6 +20,7 @@
 #include "providers/bttv/BttvBadges.hpp"
 #include "providers/bttv/BttvEmotes.hpp"
 #include "providers/ffz/FfzEmotes.hpp"
+#include "providers/dgg/DggChatServer.hpp"
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/links/LinkResolver.hpp"
 #include "providers/pronouns/Pronouns.hpp"
@@ -203,6 +204,7 @@ Application::Application(Settings &_settings, const Paths &paths,
     , pronouns(new pronouns::Pronouns)
     , spellChecker(new SpellChecker)
     , kickChatServer(new KickChatServer)
+    , dggChatServer(new DggChatServer)
 #ifdef CHATTERINO_HAVE_PLUGINS
     , plugins(new PluginController(paths))
 #endif
@@ -256,6 +258,7 @@ void Application::initialize(Settings &settings, const Paths &paths)
 
     this->twitch->initialize();
     this->kickChatServer->initialize();
+    this->dggChatServer->initialize();
 
     // Load live status
     this->notifications->initialize();
@@ -631,6 +634,14 @@ KickChatServer *Application::getKickChatServer()
     assert(this->kickChatServer);
 
     return this->kickChatServer.get();
+}
+
+DggChatServer *Application::getDggChatServer()
+{
+    assertInGuiThread();
+    assert(this->dggChatServer);
+
+    return this->dggChatServer.get();
 }
 
 void Application::aboutToQuit()

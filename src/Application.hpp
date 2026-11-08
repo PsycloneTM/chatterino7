@@ -69,6 +69,7 @@ class IController;
 class SpellChecker;
 
 class KickChatServer;
+class DggChatServer;
 
 class IApplication
 {
@@ -129,6 +130,7 @@ public:
     virtual eventsub::IController *getEventSub() = 0;
     virtual SpellChecker *getSpellChecker() = 0;
     virtual KickChatServer *getKickChatServer() = 0;
+    virtual DggChatServer *getDggChatServer() = 0;
 };
 
 class Application : public IApplication
@@ -204,6 +206,7 @@ private:
     std::unique_ptr<pronouns::Pronouns> pronouns;
     std::unique_ptr<SpellChecker> spellChecker;
     std::unique_ptr<KickChatServer> kickChatServer;
+    std::unique_ptr<DggChatServer> dggChatServer;
 #ifdef CHATTERINO_HAVE_PLUGINS
     std::unique_ptr<PluginController> plugins;
 #endif
@@ -266,6 +269,7 @@ public:
     ITwitchUsers *getTwitchUsers() override;
     SpellChecker *getSpellChecker() override;
     KickChatServer *getKickChatServer() override;
+    DggChatServer *getDggChatServer() override;
 
 private:
     void initNm(const Modes &modes, const Paths &paths);

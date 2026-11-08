@@ -59,6 +59,8 @@ public:
         /// TwitchEnd
         TwitchEnd,
         Kick,
+        /// Dgg
+        Dgg,
         /// Misc
         Misc,
         Multi,
@@ -85,6 +87,7 @@ public:
     virtual const QString &getLocalizedName() const;
     bool isTwitchChannel() const;
     bool isKickChannel() const;
+    bool isDggChannel() const;
     bool isTwitchOrKickChannel() const;
     virtual bool isEmpty() const;
 
@@ -242,6 +245,8 @@ constexpr std::optional<std::string_view> qmagicenumSerializedName(
             return "misc";
         case Type::Kick:
             return "kick";
+        case Type::Dgg:
+            return "dgg";
         case Type::Multi:
             return "multi";
 

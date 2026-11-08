@@ -955,7 +955,8 @@ TEST_F(PluginTest, ChannelType)
         out = table.concat(values, ",")
     )lua");
 
-    const char *VALUES = "Direct,"
+    const char *VALUES = "Dgg,"
+                         "Direct,"
                          "Kick,"
                          "Misc,"
                          "Multi,"
