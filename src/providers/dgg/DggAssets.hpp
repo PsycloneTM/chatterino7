@@ -54,10 +54,18 @@ public:
     /// an image are skipped.
     std::vector<EmotePtr> badgesFor(const DggUser &user) const;
 
-    /// The nick colour from the user's flairs. Null if no flair has a colour,
-    /// or if the winning flair is rainbow-only (chat-gui animates that one,
-    /// which can't be drawn here, so the default colour is used).
-    std::optional<QColor> nickColorFor(const DggUser &user) const;
+    /// How the nick is drawn, from the user's flairs.
+    struct NickStyle {
+        /// Null if no flair has a colour (and none is rainbow). For a rainbow
+        /// flair this is its plain colour, if it has one, used when paints
+        /// are turned off.
+        std::optional<QColor> color;
+
+        /// The winning flair is rainbow-coloured.
+        bool rainbow = false;
+    };
+
+    NickStyle nickStyleFor(const DggUser &user) const;
 
 private:
     struct StringViewHash : std::hash<QStringView> {

@@ -918,6 +918,7 @@ TEST_F(PluginTest, MessageElementFlag)
                          "ChannelName=0x100000,"
                          "ChannelPointReward=0x100,"
                          "Collapsed=0x4000000,"
+                         "DggRainbowUsername=0x20000000000000,"
                          "EmojiImage=0x800000,"
                          "EmojiText=0x1000000,"
                          "EmoteImage=0x10,"

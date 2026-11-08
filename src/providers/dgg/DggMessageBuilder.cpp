@@ -112,7 +112,8 @@ MessagePtrMut DggMessageBuilder::makeChatMessage(DggChannel *channel,
         builder.emplace<BadgeElement>(badge, MessageElementFlag::BadgeVanity);
     }
 
-    const auto nickColor = assets.nickColorFor(msg.user);
+    const auto nickStyle = assets.nickStyleFor(msg.user);
+    const auto &nickColor = nickStyle.color;
     if (nickColor)
     {
         builder->usernameColor = *nickColor;
@@ -124,10 +125,14 @@ MessagePtrMut DggMessageBuilder::makeChatMessage(DggChannel *channel,
     {
         usernameText.append(u':');
     }
-    builder.emplace<TextElement>(
+    auto *nickElement = builder.emplace<TextElement>(
         usernameText, MessageElementFlag::Username,
         nickColor ? MessageColor(*nickColor) : MessageColor::Text,
         FontStyle::ChatMediumBold);
+    if (nickStyle.rainbow)
+    {
+        nickElement->addFlags(MessageElementFlag::DggRainbowUsername);
+    }
 
     const QString simplified = msg.text.simplified();
     QString messageText;

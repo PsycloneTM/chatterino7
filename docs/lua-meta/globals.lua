@@ -882,6 +882,7 @@ c2.MessageElementFlag = {
     KickUsername = 0,
     PlatformBadgeAlways = 0,
     PlatformBadgeIfUnselected = 0,
+    DggRainbowUsername = 0,
     Default = 0,
 }
 

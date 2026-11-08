@@ -232,20 +232,26 @@ std::vector<EmotePtr> DggAssets::badgesFor(const DggUser &user) const
     return out;
 }
 
-std::optional<QColor> DggAssets::nickColorFor(const DggUser &user) const
+DggAssets::NickStyle DggAssets::nickStyleFor(const DggUser &user) const
 {
+    NickStyle style;
+
     const auto *flair = dggNickColorFlair(this->flairs_, user.features);
-    if (flair == nullptr || flair->color.isEmpty())
+    if (flair == nullptr)
     {
-        return std::nullopt;
+        return style;
     }
 
-    QColor color(flair->color);
-    if (!color.isValid())
+    style.rainbow = flair->rainbowColor;
+    if (!flair->color.isEmpty())
     {
-        return std::nullopt;
+        QColor color(flair->color);
+        if (color.isValid())
+        {
+            style.color = color;
+        }
     }
-    return color;
+    return style;
 }
 
 }  // namespace chatterino

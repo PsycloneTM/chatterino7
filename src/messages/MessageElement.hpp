@@ -178,6 +178,11 @@ enum class MessageElementFlag : int64_t {
     /// from the message's.
     PlatformBadgeIfUnselected = (1LL << 52),
 
+    /// `Username` of a destiny.gg nick whose flair is rainbow-coloured. Drawn
+    /// with the static rainbow paint (see `dggRainbowPaint()`), if 7TV paints
+    /// are enabled.
+    DggRainbowUsername = (1LL << 53),
+
     Default = Timestamp | Badges | Username | BitsStatic | EmoteImage |
               BitsAmount | Text | AlwaysShow,
 };

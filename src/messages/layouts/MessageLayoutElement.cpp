@@ -9,6 +9,8 @@
 #include "messages/Image.hpp"
 #include "messages/layouts/MessageLayoutContext.hpp"
 #include "messages/MessageElement.hpp"
+#include "providers/dgg/DggRainbowPaint.hpp"
+#include "providers/seventv/paints/Paint.hpp"
 #include "providers/seventv/paints/PaintDropShadow.hpp"
 #include "providers/seventv/SeventvPaints.hpp"
 #include "providers/twitch/TwitchEmotes.hpp"
@@ -519,6 +521,21 @@ void TextLayoutElement::paint(QPainter &painter,
             painter.drawPixmap(this->getRect().topLeft(), paintPixmap);
             return;
         }
+    }
+
+    // destiny.gg nicks with a rainbow flair. They have no user-info link, so
+    // the lookup above doesn't apply. Falls back to the plain colour if 7TV
+    // paints are turned off.
+    if (this->getCreator().getFlags().has(
+            MessageElementFlag::DggRainbowUsername) &&
+        getSettings()->displaySevenTVPaints)
+    {
+        auto paintPixmap = dggRainbowPaint()->getPixmap(
+            this->getText(), font, this->color_, this->getRect().size(),
+            this->scale_, this->dpr_);
+
+        painter.drawPixmap(this->getRect().topLeft(), paintPixmap);
+        return;
     }
 
     painter.setPen(this->color_);

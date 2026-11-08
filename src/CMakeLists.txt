@@ -458,6 +458,8 @@ set(SOURCE_FILES
         providers/dgg/DggManifest.cpp
         providers/dgg/DggManifest.hpp
         providers/dgg/DggMessage.cpp
+        providers/dgg/DggRainbowPaint.cpp
+        providers/dgg/DggRainbowPaint.hpp
         providers/dgg/DggMessage.hpp
         providers/dgg/DggMessageBuilder.cpp
         providers/dgg/DggMessageBuilder.hpp
