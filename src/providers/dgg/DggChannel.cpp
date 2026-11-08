@@ -13,7 +13,10 @@ DggChannel::DggChannel()
 {
 }
 
-DggChannel::~DggChannel() = default;
+DggChannel::~DggChannel()
+{
+    this->aboutToClose.invoke();
+}
 
 const QString &DggChannel::getDisplayName() const
 {

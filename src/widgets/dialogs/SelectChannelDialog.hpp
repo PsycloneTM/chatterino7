@@ -98,6 +98,7 @@ private:
         MicroNotebook *notebook;
         QWidget *twitchPage;
         QWidget *kickPage;
+        QWidget *dggPage;
         QWidget *multiPage;
     } ui_{};
 

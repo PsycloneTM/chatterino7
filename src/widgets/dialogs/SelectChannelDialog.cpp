@@ -6,6 +6,7 @@
 
 #include "Application.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
+#include "providers/dgg/DggChatServer.hpp"
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Fonts.hpp"
@@ -314,6 +315,22 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
 
         ui.notebook->addPage(ui.kickPage, "Kick");
     }
+    // DGG
+    {
+        ui.dggPage = new QWidget;
+        auto *layout = new QVBoxLayout(ui.dggPage);
+
+        auto *dggLabel = new QLabel(
+            "Join the destiny.gg (DGG) chat.<br>This is <b>very "
+            "experimental</b>. It's read-only for now and shows DGG emotes "
+            "only.");
+        dggLabel->setWordWrap(true);
+        layout->addWidget(dggLabel);
+
+        layout->addStretch(1);
+
+        ui.notebook->addPage(ui.dggPage, "DGG");
+    }
     // Multi
     {
         ui.multiPage = new QWidget;
@@ -457,6 +474,10 @@ void SelectChannelDialog::setSelectedChannel(
             this->ui_.notebook->select(this->ui_.kickPage);
         }
         break;
+        case Channel::Type::Dgg: {
+            this->ui_.notebook->select(this->ui_.dggPage);
+        }
+        break;
         case Channel::Type::Multi: {
             const auto *mc = dynamic_cast<const MultiChannel *>(channel.get());
             if (mc)
@@ -495,6 +516,11 @@ IndirectChannel SelectChannelDialog::getSelectedChannel() const
     {
         return getApp()->getKickChatServer()->getOrCreate(
             this->ui_.kickName->text().trimmed());
+    }
+
+    if (this->ui_.notebook->isSelected(this->ui_.dggPage))
+    {
+        return getApp()->getDggChatServer()->getOrCreate();
     }
 
     if (this->ui_.notebook->isSelected(this->ui_.multiPage))

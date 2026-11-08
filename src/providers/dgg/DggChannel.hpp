@@ -17,6 +17,10 @@ public:
     DggChannel();
     ~DggChannel() override;
 
+    /// Fired from the destructor, so the server can drop the connection once
+    /// no split shows DGG chat anymore.
+    pajlada::Signals::NoArgSignal aboutToClose;
+
     const QString &getDisplayName() const override;
 
     bool canSendMessage() const override;

@@ -451,6 +451,10 @@ set(SOURCE_FILES
         providers/dgg/DggChannel.hpp
         providers/dgg/DggChatServer.cpp
         providers/dgg/DggChatServer.hpp
+        providers/dgg/DggFrame.cpp
+        providers/dgg/DggFrame.hpp
+        providers/dgg/DggWebSocket.cpp
+        providers/dgg/DggWebSocket.hpp
 
         providers/emoji/Emojis.cpp
         providers/emoji/Emojis.hpp
