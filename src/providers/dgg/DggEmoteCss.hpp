@@ -56,6 +56,20 @@ struct DggEmoteStyle {
     /// coloured. Valid (with at least one frame) if `valid`.
     SpriteSheetSpec sprite;
 
+    /// `background-size` in pixels, or empty if the stylesheet sets none. The
+    /// whole image is drawn at this size (before any frame is cut out of it).
+    QSize backgroundSize;
+
+    /// True if a single-frame emote is just its whole image scaled by
+    /// `background-size`.
+    bool isScaledWholeImage() const
+    {
+        return this->valid && !this->backgroundSize.isEmpty() &&
+               this->sprite.offsets.size() == 1 &&
+               this->sprite.offsets[0] == QPoint(0, 0) &&
+               this->sprite.filters.empty();
+    }
+
     /// Things in the stylesheet that apply to this emote but that are not
     /// reproduced (a `transform`, an animation that isn't `steps()`, ...).
     /// For logs and tests.

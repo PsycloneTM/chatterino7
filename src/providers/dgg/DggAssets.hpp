@@ -116,14 +116,16 @@ private:
     /// gets an image of its own (in the browser, each message plays it).
     DggEmoteStyle withOwnPlay(DggEmoteStyle style) const;
 
-    void fetch(const QString &url,
+    /// Both try the given URLs in order until one answers. `onData` also
+    /// gets the URL that did.
+    void fetch(std::vector<QString> urls,
                std::function<void(const QJsonArray &)> onData);
-    void fetchText(const QString &url,
-                   std::function<void(const QString &)> onData);
+    void fetchText(std::vector<QString> urls,
+                   std::function<void(const QString &, const QString &)> onData);
     void onFetchFinished();
     void applyEmotes(const QJsonArray &json);
     void applyFlairs(const QJsonArray &json);
-    void applyFlairCss(const QString &css);
+    void applyFlairCss(const QString &css, const QString &sourceUrl);
 
     /// Badges from the flair manifest, plus the ones only the stylesheet
     /// knows about. Needs both to be called again when either one arrives.
@@ -146,6 +148,9 @@ private:
 
     /// The raw `flairs.css`; parsed again whenever the manifest changes.
     QString flairCss_;
+
+    /// The directory `flairs.css` came from; its relative URLs start there.
+    QString flairCssBase_;
     StringMap<EmotePtr> badges_;
 
     /// CSS `order` of the badges that have one, by flair name.

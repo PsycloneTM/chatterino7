@@ -1723,6 +1723,31 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
     {
         parseFilters(*filter, props, style.sprite.filters, notes);
     }
+
+    // `background-size: 32px 32px` (or one value for both) shrinks or
+    // stretches the whole image, e.g. a 500px GIF drawn at 32px (BlueWave).
+    if (const auto *raw = get("background-size"))
+    {
+        if (const auto resolved = resolveVars(*raw, props))
+        {
+            const string_view text = trimView(*resolved);
+            const auto space = text.find(' ');
+            const auto first = parseLengthPx(text.substr(0, space));
+            const auto second = space == string_view::npos
+                                    ? first
+                                    : parseLengthPx(text.substr(space + 1));
+            if (first && second && *first >= 1 && *second >= 1)
+            {
+                style.backgroundSize =
+                    QSize(static_cast<int>(std::lround(*first)),
+                          static_cast<int>(std::lround(*second)));
+            }
+            else if (text != "auto" && text != "initial")
+            {
+                notes.emplace_back("background-size " + string(text));
+            }
+        }
+    }
     for (const char *ignored : {"transform", "mask-image", "mix-blend-mode"})
     {
         if (const auto *value = get(ignored); value != nullptr &&
@@ -1759,7 +1784,9 @@ QString DggEmoteStyle::cacheKey() const
     {
         return QStringLiteral("plain");
     }
-    return this->sprite.cacheKey();
+    return this->sprite.cacheKey() +
+           QStringLiteral("|bg%1x%2").arg(this->backgroundSize.width()).arg(
+               this->backgroundSize.height());
 }
 
 // ---------------------------------------------------------------------------

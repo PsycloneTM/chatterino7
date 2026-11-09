@@ -8,11 +8,13 @@
 #include "messages/ImageSet.hpp"
 #include "providers/dgg/DggMessage.hpp"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QSize>
 #include <QUrl>
 
 #include <algorithm>
+#include <set>
 #include <utility>
 
 namespace {
@@ -20,14 +22,31 @@ namespace {
 using namespace chatterino;
 using namespace Qt::Literals;
 
-constexpr auto EMOTES_URL = "https://cdn.destiny.gg/emotes/emotes.json"_L1;
-constexpr auto FLAIRS_URL = "https://cdn.destiny.gg/flairs/flairs.json"_L1;
+/// DGG moved newer assets to `r2cdn.destiny.gg` (that's where flair127 lives,
+/// for example), and the older host can serve stale lists. Ask the new host
+/// first and fall back to the old one.
+constexpr auto NEW_CDN = "https://r2cdn.destiny.gg/"_L1;
+constexpr auto OLD_CDN = "https://cdn.destiny.gg/"_L1;
 
-/// chat-gui loads it from the same place as the manifest.
-constexpr auto EMOTES_CSS_URL = "https://cdn.destiny.gg/emotes/emotes.css"_L1;
+std::vector<QString> cdnUrls(const QString &path)
+{
+    // chat-gui adds `?_=<cache key>` to get around the CDN cache
+    const auto stamp = QDateTime::currentSecsSinceEpoch() / 60;
+    return {
+        QString(NEW_CDN) + path + u"?_="_s + QString::number(stamp),
+        QString(OLD_CDN) + path,
+    };
+}
 
-/// The manifest doesn't list every flair that has an image here.
-constexpr auto FLAIRS_CSS_URL = "https://cdn.destiny.gg/flairs/flairs.css"_L1;
+QString directoryOf(const QString &url)
+{
+    QString clean = url;
+    if (const auto q = clean.indexOf(u'?'); q >= 0)
+    {
+        clean.truncate(q);
+    }
+    return clean.left(clean.lastIndexOf(u'/') + 1);
+}
 
 constexpr int REQUEST_TIMEOUT_MS = 15000;
 
@@ -51,6 +70,23 @@ QSize sheetSizeOf(const DggImageRef &ref)
 ImageSet imageSetFor(const DggImageRef &ref, const DggEmoteStyle &style)
 {
     const QSize size = sheetSizeOf(ref);
+    if (style.isScaledWholeImage())
+    {
+        // `background-size`: the whole (possibly animated) image, drawn at
+        // another size. A square target is the common case (BlueWave: 32px).
+        const auto target = style.backgroundSize;
+        if (target.width() == target.height())
+        {
+            return ImageSet(Image::fromAutoscaledUrl(
+                Url{ref.url}, static_cast<uint16_t>(target.width())));
+        }
+        if (!size.isEmpty())
+        {
+            return ImageSet(Image::fromUrl(
+                Url{ref.url},
+                static_cast<qreal>(target.width()) / size.width(), size));
+        }
+    }
     if (style.valid && !style.isWholeImage(size))
     {
         return ImageSet(Image::fromSpriteSheet(Url{ref.url}, style.sprite));
@@ -119,82 +155,89 @@ void DggAssets::load()
     this->loading_ = true;
     this->pending_ = 4;
 
-    this->fetch(EMOTES_URL, [this](const QJsonArray &json) {
-        this->applyEmotes(json);
-    });
-    this->fetch(FLAIRS_URL, [this](const QJsonArray &json) {
-        this->applyFlairs(json);
-    });
-    this->fetchText(EMOTES_CSS_URL, [this](const QString &css) {
-        this->applyCss(css);
-    });
-    this->fetchText(FLAIRS_CSS_URL, [this](const QString &css) {
-        this->applyFlairCss(css);
-    });
+    this->fetch(cdnUrls(QStringLiteral("emotes/emotes.json")),
+                [this](const QJsonArray &json) {
+                    this->applyEmotes(json);
+                });
+    this->fetch(cdnUrls(QStringLiteral("flairs/flairs.json")),
+                [this](const QJsonArray &json) {
+                    this->applyFlairs(json);
+                });
+    this->fetchText(cdnUrls(QStringLiteral("emotes/emotes.css")),
+                    [this](const QString &css, const QString &) {
+                        this->applyCss(css);
+                    });
+    this->fetchText(cdnUrls(QStringLiteral("flairs/flairs.css")),
+                    [this](const QString &css, const QString &url) {
+                        this->applyFlairCss(css, url);
+                    });
 }
 
-void DggAssets::fetchText(const QString &url,
-                          std::function<void(const QString &)> onData)
+namespace {
+
+void fetchFirst(std::shared_ptr<const std::vector<QString>> urls, size_t index,
+                std::weak_ptr<bool> weak,
+                std::function<void(NetworkResult, const QString &)> onData,
+                std::function<void()> done)
 {
-    std::weak_ptr<bool> weak = this->alive_;
+    const QString url = (*urls)[index];
 
     NetworkRequest(QUrl(url))
         .timeout(REQUEST_TIMEOUT_MS)
-        .onSuccess([weak, onData = std::move(onData)](NetworkResult result) {
+        .onSuccess([weak, url, onData, done](NetworkResult result) {
             if (weak.expired())
             {
                 return;
             }
-            onData(QString::fromUtf8(result.getData()));
+            onData(std::move(result), url);
+            done();
         })
-        .onError([weak, url](NetworkResult result) {
+        .onError([weak, urls, index, url, onData, done](NetworkResult result) {
             if (weak.expired())
             {
                 return;
             }
             qCWarning(chatterinoDgg)
                 << "Failed to load" << url << result.formatError();
-        })
-        .finally([weak, this] {
-            if (weak.expired())
+            if (index + 1 < urls->size())
             {
+                fetchFirst(urls, index + 1, weak, onData, done);
                 return;
             }
-            this->onFetchFinished();
+            done();
         })
         .execute();
 }
 
-void DggAssets::fetch(const QString &url,
+}  // namespace
+
+void DggAssets::fetchText(
+    std::vector<QString> urls,
+    std::function<void(const QString &, const QString &)> onData)
+{
+    fetchFirst(
+        std::make_shared<const std::vector<QString>>(std::move(urls)), 0,
+        this->alive_,
+        [onData = std::move(onData)](NetworkResult result, const QString &url) {
+            onData(QString::fromUtf8(result.getData()), url);
+        },
+        [this] {
+            this->onFetchFinished();
+        });
+}
+
+void DggAssets::fetch(std::vector<QString> urls,
                       std::function<void(const QJsonArray &)> onData)
 {
-    std::weak_ptr<bool> weak = this->alive_;
-
-    NetworkRequest(QUrl(url))
-        .timeout(REQUEST_TIMEOUT_MS)
-        .onSuccess([weak, onData = std::move(onData)](NetworkResult result) {
-            if (weak.expired())
-            {
-                return;
-            }
+    fetchFirst(
+        std::make_shared<const std::vector<QString>>(std::move(urls)), 0,
+        this->alive_,
+        [onData = std::move(onData)](NetworkResult result, const QString &) {
             onData(result.parseJsonArray());
-        })
-        .onError([weak, url](NetworkResult result) {
-            if (weak.expired())
-            {
-                return;
-            }
-            qCWarning(chatterinoDgg)
-                << "Failed to load" << url << result.formatError();
-        })
-        .finally([weak, this] {
-            if (weak.expired())
-            {
-                return;
-            }
+        },
+        [this] {
             this->onFetchFinished();
-        })
-        .execute();
+        });
 }
 
 void DggAssets::onFetchFinished()
@@ -308,7 +351,7 @@ void DggAssets::applyFlairs(const QJsonArray &json)
     this->rebuildBadges();
 }
 
-void DggAssets::applyFlairCss(const QString &css)
+void DggAssets::applyFlairCss(const QString &css, const QString &sourceUrl)
 {
     if (css.trimmed().isEmpty())
     {
@@ -320,26 +363,33 @@ void DggAssets::applyFlairCss(const QString &css)
     // Parsed in rebuildBadges: the image URLs in it are relative, and which
     // directory they belong to is only known once the manifest has arrived.
     this->flairCss_ = css;
+    this->flairCssBase_ = directoryOf(sourceUrl);
     this->rebuildBadges();
 }
 
 void DggAssets::rebuildBadges()
 {
-    // The stylesheet's `url("abc.png")` is relative to a *versioned* directory
-    // (the manifest says `https://cdn.destiny.gg/4.50.1/flairs/abc.png`).
-    // Resolving against the unversioned stylesheet URL gives a 404, which is
-    // why CSS-only flairs like flair127 showed nothing. Take the directory
-    // from any image in the manifest.
-    QString cssBase = FLAIRS_CSS_URL;
-    for (const auto &def : this->flairs_)
+    // The stylesheet's `url("abc.png")` is relative to the directory it was
+    // served from (https://r2cdn.destiny.gg/flairs/ for flair127). The old
+    // host keeps files in a versioned directory instead, so when the
+    // stylesheet only came from there, borrow that directory from the manifest.
+    QString cssBase = this->flairCssBase_;
+    if (!cssBase.startsWith(QString(NEW_CDN)))
     {
-        const auto &url = def.image.url;
-        const auto slash = url.lastIndexOf(u'/');
-        if (def.image.isValid() && slash > 0)
+        for (const auto &def : this->flairs_)
         {
-            cssBase = url.left(slash + 1);
-            break;
+            const auto &url = def.image.url;
+            const auto slash = url.lastIndexOf(u'/');
+            if (def.image.isValid() && slash > 0)
+            {
+                cssBase = url.left(slash + 1);
+                break;
+            }
         }
+    }
+    if (cssBase.isEmpty())
+    {
+        cssBase = QString(NEW_CDN) + u"flairs/"_s;
     }
     this->cssFlairs_.clear();
     if (!this->flairCss_.isEmpty())
@@ -350,18 +400,10 @@ void DggAssets::rebuildBadges()
                                << cssBase;
     }
 
+    // The stylesheet is the main source for badge images and their order.
+    // The manifest only fills in flairs the stylesheet has no image for
+    // (its images are the same ones in most cases).
     StringMap<EmotePtr> badges;
-    for (const auto &def : this->flairs_)
-    {
-        if (def.image.isValid())
-        {
-            badges.emplace(def.name, makeBadge(def));
-        }
-    }
-
-    // The manifest wins. The stylesheet fills in the flairs it has no image
-    // for or doesn't list at all (chat-gui doesn't draw those, we do).
-    size_t extra = 0;
     StringMap<int> orders;
     for (const auto &def : this->cssFlairs_)
     {
@@ -370,16 +412,21 @@ void DggAssets::rebuildBadges()
         {
             continue;
         }
-        if (badges.emplace(def.name, makeBadge(def)).second)
+        qCDebug(chatterinoDgg) << "  flair" << def.name << "->" << def.image.url
+                               << def.image.width << "x" << def.image.height;
+        badges.emplace(def.name, makeBadge(def));
+    }
+
+    size_t fromManifest = 0;
+    for (const auto &def : this->flairs_)
+    {
+        if (def.image.isValid() && badges.emplace(def.name, makeBadge(def)).second)
         {
-            extra++;
+            fromManifest++;
         }
     }
-    if (extra > 0)
-    {
-        qCDebug(chatterinoDgg)
-            << extra << "flair badges come from the stylesheet only";
-    }
+    qCDebug(chatterinoDgg) << badges.size() << "flair badges," << fromManifest
+                           << "of them only from the manifest";
 
     this->badges_ = std::move(badges);
     this->badgeOrder_ = std::move(orders);
@@ -462,6 +509,13 @@ std::vector<EmotePtr> DggAssets::badgesFor(const DggUser &user) const
         auto it = this->badges_.find(feature);
         if (it == this->badges_.end())
         {
+            static std::set<QString> reported;
+            if (feature.startsWith(u"flair") && reported.insert(feature).second)
+            {
+                qCDebug(chatterinoDgg)
+                    << "No badge image for" << feature
+                    << "(not in flairs.css with an image, nor in flairs.json)";
+            }
             continue;
         }
         int order = 0;
