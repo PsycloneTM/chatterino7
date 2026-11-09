@@ -7,6 +7,11 @@
 #include "providers/dgg/DggMessage.hpp"
 #include "singletons/Settings.hpp"
 
+#include <QStringList>
+
+#include <algorithm>
+#include <vector>
+
 namespace {
 
 using namespace chatterino;
@@ -46,6 +51,64 @@ void appendWord(DggMessageBuilder &builder, QStringView word,
     }
     builder.emplace<TextElement>(word.toString(), MessageElementFlag::Text,
                                  textColor);
+}
+
+/// The elements chat-gui would put directly inside the message's text, in
+/// order: the emote's name for an emote, an empty string for anything else
+/// that is an element (a link, an `@mention`). Plain words are text nodes and
+/// don't count. The emote CSS looks at these to tell which emotes sit next to
+/// each other.
+struct TextElements {
+    QStringList names;
+    /// For every word, the index into `names` of the element it became, or -1
+    /// for a plain word.
+    std::vector<int> indexOfWord;
+};
+
+bool isMention(QStringView word)
+{
+    // chat-gui wraps `@nick` (3 to 20 word characters, optionally followed by
+    // punctuation) in a span
+    if (!word.startsWith(u'@'))
+    {
+        return false;
+    }
+    auto name = word.sliced(1);
+    while (!name.isEmpty() && QStringView(u".?!,'").contains(name.back()))
+    {
+        name.chop(1);
+    }
+    if (name.size() < 3 || name.size() > 20)
+    {
+        return false;
+    }
+    return std::all_of(name.begin(), name.end(), [](QChar c) {
+        return c.isLetterOrNumber() || c == u'_';
+    });
+}
+
+TextElements collectElements(const QStringList &words, const DggUser &user,
+                             const DggAssets &assets)
+{
+    TextElements out;
+    for (const auto &word : words)
+    {
+        if (assets.isEmoteFor(word, user))
+        {
+            out.indexOfWord.push_back(static_cast<int>(out.names.size()));
+            out.names.append(word);
+        }
+        else if (isMention(word) || linkparser::parse(word))
+        {
+            out.indexOfWord.push_back(static_cast<int>(out.names.size()));
+            out.names.append(QString());
+        }
+        else
+        {
+            out.indexOfWord.push_back(-1);
+        }
+    }
+    return out;
 }
 
 QString displayedNick(const QString &nick)
@@ -135,19 +198,29 @@ MessagePtrMut DggMessageBuilder::makeChatMessage(DggChannel *channel,
         nickElement->addFlags(MessageElementFlag::DggRainbowUsername);
     }
 
-    // Emotes look different depending on who says them
-    const auto emoteContext =
-        assets.emoteContextFor(msg.user, msg.isAction, backlog);
+    // Emotes look different depending on who says them and on what sits next
+    // to them
+    auto emoteContext = assets.emoteContextFor(msg.user, msg.isAction, backlog);
+    emoteContext.greentext = msg.greentext;
 
     const QString simplified = msg.text.simplified();
+    const QStringList words =
+        simplified.split(QChar(u' '), Qt::SkipEmptyParts);
+    const auto elements = collectElements(words, msg.user, assets);
+    emoteContext.elements = elements.names;
+
     QString messageText;
-    for (auto word : QStringView(simplified).tokenize(u' ', Qt::SkipEmptyParts))
+    for (qsizetype i = 0; i < words.size(); i++)
     {
+        const QString &word = words[i];
         if (!messageText.isEmpty())
         {
             messageText.append(u' ');
         }
         messageText.append(word);
+
+        emoteContext.elementIndex =
+            elements.indexOfWord[static_cast<size_t>(i)];
         appendWord(builder, word, msg.user, emoteContext, msg.greentext,
                    assets);
     }

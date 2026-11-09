@@ -503,6 +503,12 @@ void DggAssets::rebuildBadges()
     this->badgeOrder_ = std::move(orders);
 }
 
+bool DggAssets::isEmoteFor(QStringView word, const DggUser &user) const
+{
+    const auto it = this->emotes_.find(word);
+    return it != this->emotes_.end() && dggCanUseEmote(it->second.def, user);
+}
+
 EmotePtr DggAssets::emoteFor(QStringView word, const DggUser &user) const
 {
     return this->emoteFor(word, user,

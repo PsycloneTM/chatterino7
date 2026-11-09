@@ -8,6 +8,8 @@
 #include <cmath>
 #include <optional>
 #include <string_view>
+#include <system_error>
+#include <utility>
 
 namespace chatterino {
 
@@ -662,6 +664,272 @@ std::optional<Compound> parseCompound(string_view c)
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Pseudo-classes that look at the message's elements
+// ---------------------------------------------------------------------------
+
+/// `odd`, `even`, `3`, `2n`, `-n+2`, `6n-5` as `an + b`.
+std::optional<std::pair<int, int>> parseNth(string_view raw)
+{
+    string text;
+    for (const char c : raw)
+    {
+        if (!isSpace(c))
+        {
+            text.push_back(static_cast<char>(std::tolower(
+                static_cast<unsigned char>(c))));
+        }
+    }
+    if (text == "odd")
+    {
+        return std::make_pair(2, 1);
+    }
+    if (text == "even")
+    {
+        return std::make_pair(2, 0);
+    }
+    if (text.empty())
+    {
+        return std::nullopt;
+    }
+
+    const auto toInt = [](string_view part) -> std::optional<int> {
+        if (part.empty())
+        {
+            return std::nullopt;
+        }
+        if (part.front() == '+')
+        {
+            part.remove_prefix(1);
+        }
+        int value = 0;
+        const auto *end = part.data() + part.size();
+        const auto result = std::from_chars(part.data(), end, value);
+        if (result.ec != std::errc() || result.ptr != end)
+        {
+            return std::nullopt;
+        }
+        return value;
+    };
+
+    const auto n = text.find('n');
+    if (n == NPOS)
+    {
+        if (const auto b = toInt(text))
+        {
+            return std::make_pair(0, *b);
+        }
+        return std::nullopt;
+    }
+
+    const string aText = text.substr(0, n);
+    int a = 1;
+    if (aText == "-")
+    {
+        a = -1;
+    }
+    else if (!aText.empty() && aText != "+")
+    {
+        const auto parsed = toInt(aText);
+        if (!parsed)
+        {
+            return std::nullopt;
+        }
+        a = *parsed;
+    }
+
+    int b = 0;
+    if (n + 1 < text.size())
+    {
+        const auto parsed = toInt(string_view(text).substr(n + 1));
+        if (!parsed)
+        {
+            return std::nullopt;
+        }
+        b = *parsed;
+    }
+    return std::make_pair(a, b);
+}
+
+bool fillStructural(Compound &c, string &why);
+
+std::optional<ComplexSelector> parseComplex(string_view text, string &why)
+{
+    ComplexSelector out;
+    for (const auto &raw : tokenizeSelector(text))
+    {
+        auto compound = parseCompound(raw.text);
+        if (!compound)
+        {
+            why = "unparsable selector";
+            return std::nullopt;
+        }
+        if (!fillStructural(*compound, why))
+        {
+            return std::nullopt;
+        }
+        out.parts.push_back(SelectorPart{raw.combinator, std::move(*compound)});
+    }
+    if (out.parts.empty())
+    {
+        why = "empty selector";
+        return std::nullopt;
+    }
+    return out;
+}
+
+/// Parses the pseudo-classes of a compound into `structural`. Returns false
+/// (with `why` set) for one that isn't understood. `:hover` is left to the
+/// caller, a pseudo-element is an error.
+bool fillStructural(Compound &c, string &why)
+{
+    using Kind = PseudoClass::Kind;
+
+    c.structural.clear();
+    for (const auto &pseudo : c.pseudos)
+    {
+        if (pseudo == ":hover")
+        {
+            continue;
+        }
+        if (startsWith(pseudo, "::") || pseudo == ":before" ||
+            pseudo == ":after")
+        {
+            why = "pseudo-element";
+            return false;
+        }
+
+        const auto paren = pseudo.find('(');
+        const string name = toLower(
+            string_view(pseudo).substr(1, (paren == NPOS ? pseudo.size() : paren) - 1));
+        string_view arg;
+        if (paren != NPOS && pseudo.back() == ')')
+        {
+            arg = string_view(pseudo).substr(paren + 1,
+                                             pseudo.size() - paren - 2);
+        }
+
+        PseudoClass pc;
+        if (name == "not" || name == "is" || name == "where" || name == "has")
+        {
+            if (paren == NPOS)
+            {
+                why = "pseudo-class " + name;
+                return false;
+            }
+            pc.kind = name == "not"   ? Kind::Not
+                      : name == "has" ? Kind::Has
+                                      : Kind::Is;
+            for (const auto &part : splitTopLevel(arg, ','))
+            {
+                auto complex = parseComplex(trimView(part), why);
+                if (!complex)
+                {
+                    return false;
+                }
+                if (pc.kind != Kind::Has)
+                {
+                    complex->parts.front().combinator = 0;
+                }
+                pc.args.push_back(std::move(*complex));
+            }
+            if (pc.args.empty())
+            {
+                why = "pseudo-class " + name;
+                return false;
+            }
+        }
+        else if (name == "first-child")
+        {
+            pc.kind = Kind::FirstChild;
+        }
+        else if (name == "last-child")
+        {
+            pc.kind = Kind::LastChild;
+        }
+        else if (name == "only-child")
+        {
+            pc.kind = Kind::OnlyChild;
+        }
+        else if (name == "first-of-type")
+        {
+            pc.kind = Kind::FirstOfType;
+        }
+        else if (name == "last-of-type")
+        {
+            pc.kind = Kind::LastOfType;
+        }
+        else if (name == "only-of-type")
+        {
+            pc.kind = Kind::OnlyOfType;
+        }
+        else if (name == "nth-child" || name == "nth-last-child" ||
+                 name == "nth-of-type" || name == "nth-last-of-type")
+        {
+            const auto nth = paren == NPOS ? std::nullopt : parseNth(arg);
+            if (!nth)
+            {
+                why = "pseudo-class " + name;
+                return false;
+            }
+            pc.kind = name == "nth-child"        ? Kind::NthChild
+                      : name == "nth-last-child" ? Kind::NthLastChild
+                      : name == "nth-of-type"    ? Kind::NthOfType
+                                                 : Kind::NthLastOfType;
+            pc.a = nth->first;
+            pc.b = nth->second;
+        }
+        else
+        {
+            why = "pseudo-class " + name;
+            return false;
+        }
+        c.structural.push_back(std::move(pc));
+    }
+    return true;
+}
+
+int complexSpecificity(const ComplexSelector &complex);
+
+/// Classes, attributes and pseudo-classes count one each; `:not()`, `:is()`
+/// and `:has()` count like their most specific argument.
+int compoundSpecificity(const Compound &c)
+{
+    int n = static_cast<int>(c.classes.size() + c.attrs.size());
+    for (const auto &pseudo : c.pseudos)
+    {
+        if (pseudo == ":hover")
+        {
+            n++;
+        }
+    }
+    for (const auto &pc : c.structural)
+    {
+        if (pc.args.empty())
+        {
+            n++;
+            continue;
+        }
+        int best = 0;
+        for (const auto &arg : pc.args)
+        {
+            best = std::max(best, complexSpecificity(arg));
+        }
+        n += best;
+    }
+    return n;
+}
+
+int complexSpecificity(const ComplexSelector &complex)
+{
+    int n = 0;
+    for (const auto &part : complex.parts)
+    {
+        n += compoundSpecificity(part.compound);
+    }
+    return n;
+}
+
 struct Analysis {
     /// Empty if the selector is supported, else why not.
     string rejected;
@@ -697,59 +965,68 @@ Analysis analyseSelector(string_view selector)
     }
     out.parts.front().combinator = 0;
 
-    // The subject: exactly `.emote.NAME`
+    // The subject: `.emote.NAME` (a class can be repeated to make the rule
+    // more specific)
     const auto &subject = out.parts.back().compound;
-    if (subject.classes.size() != 2 || !subject.attrs.empty() ||
-        !contains(subject.classes, "emote"))
+    string subjectEmote;
+    bool subjectOk = subject.attrs.empty() && contains(subject.classes, "emote");
+    for (const auto &cls : subject.classes)
+    {
+        if (cls == "emote")
+        {
+            continue;
+        }
+        if (subjectEmote.empty())
+        {
+            subjectEmote = cls;
+        }
+        else if (subjectEmote != cls)
+        {
+            subjectOk = false;
+        }
+    }
+    if (!subjectOk || subjectEmote.empty())
     {
         out.rejected = "selector isn't for a single emote";
         return out;
     }
-    out.emote = subject.classes[0] == "emote" ? subject.classes[1]
-                                              : subject.classes[0];
-    if (out.emote == "emote")
-    {
-        out.rejected = "selector isn't for a single emote";
-        return out;
-    }
+    out.emote = subjectEmote;
 
-    for (const auto &part : out.parts)
+    for (auto &part : out.parts)
     {
+        string why;
+        if (!fillStructural(part.compound, why))
+        {
+            out.rejected = why;
+            return out;
+        }
         for (const auto &pseudo : part.compound.pseudos)
         {
             if (pseudo == ":hover")
             {
                 out.hover = true;
             }
-            else if (startsWith(pseudo, "::") || pseudo == ":before" ||
-                     pseudo == ":after")
-            {
-                out.rejected = "pseudo-element";
-                return out;
-            }
-            else
-            {
-                const auto paren = pseudo.find('(');
-                out.rejected =
-                    "pseudo-class " +
-                    (paren == NPOS ? pseudo : pseudo.substr(0, paren));
-                return out;
-            }
+        }
+        if (!part.compound.structural.empty())
+        {
+            out.dependsOnContext = true;
         }
     }
 
     // Everything above the subject must be a part of chat-gui's message DOM
-    // that we know: the message, the nick, or the text.
+    // that we know: the message, the nick, the text, or another emote.
     for (size_t i = 0; i + 1 < out.parts.size(); i++)
     {
         const auto &c = out.parts[i].compound;
+        const bool isEmote = contains(c.classes, "emote");
+        const bool isGreentext = contains(c.classes, "greentext");
         const bool isMessage =
             contains(c.classes, "msg-chat") ||
             (c.classes.empty() && !c.attrs.empty());
         const bool isUser = contains(c.classes, "user");
         const bool isText = c.classes.size() == 1 && c.classes[0] == "text";
 
-        if (isMessage && !isUser && !isText)
+        if (isMessage && !isUser && !isText && !isEmote && !isGreentext)
         {
             for (const auto &attr : c.attrs)
             {
@@ -764,7 +1041,7 @@ Analysis analyseSelector(string_view selector)
                 out.rejected = "combo message";
                 return out;
             }
-            if (contains(c.classes, "emote") || contains(c.classes, "text"))
+            if (contains(c.classes, "text"))
             {
                 out.rejected = "selector context";
                 return out;
@@ -781,7 +1058,13 @@ Analysis analyseSelector(string_view selector)
                 }
             }
         }
-        else if (isUser && !isMessage && c.attrs.empty())
+        else if (isEmote && !isMessage && !isUser && !isText &&
+                 !isGreentext && c.attrs.empty())
+        {
+            // another emote of the message
+            out.dependsOnContext = true;
+        }
+        else if (isUser && !isMessage && !isEmote && c.attrs.empty())
         {
             if (c.classes.size() > 1)
             {
@@ -791,6 +1074,11 @@ Analysis analyseSelector(string_view selector)
         else if (isText && c.attrs.empty())
         {
             // always there
+        }
+        else if (isGreentext && c.classes.size() == 1 && c.attrs.empty())
+        {
+            // only there in greentext
+            out.dependsOnContext = true;
         }
         else
         {
@@ -802,23 +1090,16 @@ Analysis analyseSelector(string_view selector)
     for (size_t i = 1; i < out.parts.size(); i++)
     {
         const char comb = out.parts[i].combinator;
-        if (comb == '+')
+        if (comb == '+' || (comb == '~' &&
+                            contains(out.parts[i - 1].compound.classes, "emote")))
         {
-            out.rejected = "adjacent sibling";
-            return out;
-        }
-        if (comb == '~' && i + 1 == out.parts.size())
-        {
-            out.rejected = "sibling emote";
-            return out;
+            out.dependsOnContext = true;
         }
     }
 
     for (const auto &part : out.parts)
     {
-        out.specificity += static_cast<int>(part.compound.classes.size() +
-                                            part.compound.attrs.size() +
-                                            part.compound.pseudos.size());
+        out.specificity += compoundSpecificity(part.compound);
     }
     return out;
 }
@@ -827,55 +1108,112 @@ Analysis analyseSelector(string_view selector)
 // Matching against a chat-gui message
 // ---------------------------------------------------------------------------
 
-/// The four elements of a message that selectors can talk about:
-/// message (M) > [nick (U) ~ text (T) > emote (E)].
+/// The elements of a message that selectors can talk about:
+/// message (M) > [nick (U), text (T) > [greentext (G) >] emotes (E) and
+/// links (L)].
 struct Node {
     char kind = 0;
+    /// The element name, which `:*-of-type` counts by.
+    char tag = 0;
     std::vector<string> classes;
     string username;
     int parent = -1;
-    std::vector<int> previousSiblings;
+    /// Position among the parent's children.
+    int pos = 0;
 };
 
 struct Dom {
-    std::vector<Node> nodes;  // M, U, T, E
-    int emote = 3;
+    std::vector<Node> nodes;
+    std::vector<std::vector<int>> children;
+    int emote = -1;
 };
+
+int addNode(Dom &dom, Node node, int parent)
+{
+    const int index = static_cast<int>(dom.nodes.size());
+    node.parent = parent;
+    if (parent >= 0)
+    {
+        auto &siblings = dom.children[static_cast<size_t>(parent)];
+        node.pos = static_cast<int>(siblings.size());
+        siblings.push_back(index);
+    }
+    dom.nodes.push_back(std::move(node));
+    dom.children.emplace_back();
+    return index;
+}
 
 Dom buildDom(const string &emote, const DggEmoteContext &ctx)
 {
     Dom dom;
-    dom.nodes.resize(4);
 
-    Node &m = dom.nodes[0];
+    Node m;
     m.kind = 'M';
+    m.tag = 'd';
     m.classes = {"msg-chat", "msg-user"};
     for (const auto &cls : ctx.messageClasses)
     {
         m.classes.push_back(cls.toStdString());
     }
     m.username = ctx.username.toStdString();
+    const int mIndex = addNode(dom, std::move(m), -1);
 
-    Node &u = dom.nodes[1];
+    Node u;
     u.kind = 'U';
+    u.tag = 'a';
     u.classes = {"user"};
     if (!ctx.nickColorFlair.isEmpty())
     {
         u.classes.push_back(ctx.nickColorFlair.toStdString());
     }
-    u.parent = 0;
+    addNode(dom, std::move(u), mIndex);
 
-    Node &t = dom.nodes[2];
+    Node t;
     t.kind = 'T';
+    t.tag = 's';
     t.classes = {"text"};
-    t.parent = 0;
-    t.previousSiblings = {1};
+    int container = addNode(dom, std::move(t), mIndex);
 
-    Node &e = dom.nodes[3];
-    e.kind = 'E';
-    e.classes = {"emote", emote};
-    e.parent = 2;
+    if (ctx.greentext)
+    {
+        Node g;
+        g.kind = 'G';
+        g.tag = 's';
+        g.classes = {"greentext"};
+        container = addNode(dom, std::move(g), container);
+    }
 
+    // The elements of the text. Without any information about the message
+    // the emote is the only one.
+    QStringList elements = ctx.elements;
+    int index = ctx.elementIndex;
+    const QString name = QString::fromStdString(emote);
+    if (index < 0 || index >= elements.size() || elements[index] != name)
+    {
+        elements = QStringList{name};
+        index = 0;
+    }
+    for (int i = 0; i < elements.size(); i++)
+    {
+        Node e;
+        if (elements[i].isEmpty())
+        {
+            e.kind = 'L';
+            e.tag = 'a';
+            e.classes = {"externallink"};
+        }
+        else
+        {
+            e.kind = 'E';
+            e.tag = 'd';
+            e.classes = {"emote", elements[i].toStdString()};
+        }
+        const int node = addNode(dom, std::move(e), container);
+        if (i == index)
+        {
+            dom.emote = node;
+        }
+    }
     return dom;
 }
 
@@ -885,52 +1223,247 @@ bool isSubset(const std::vector<string> &wanted, const std::vector<string> &have
                        [&](const string &cls) { return contains(have, cls); });
 }
 
-bool compoundMatches(const Compound &c, const Node &node)
+bool compoundMatches(const Compound &c, const Dom &dom, int nodeIndex);
+bool matchChain(const std::vector<SelectorPart> &parts, size_t index,
+                const Dom &dom, int nodeIndex);
+
+/// The nodes that share a parent with `nodeIndex` (itself included).
+std::vector<int> siblingsOf(const Dom &dom, int nodeIndex)
 {
-    switch (node.kind)
+    const Node &node = dom.nodes[static_cast<size_t>(nodeIndex)];
+    if (node.parent < 0)
     {
-        case 'M': {
-            if (c.classes.empty() && c.attrs.empty())
+        return {nodeIndex};
+    }
+    return dom.children[static_cast<size_t>(node.parent)];
+}
+
+bool nthMatches(int a, int b, int position)
+{
+    if (a == 0)
+    {
+        return position == b;
+    }
+    const int diff = position - b;
+    return diff % a == 0 && diff / a >= 0;
+}
+
+/// Whether anything matching `parts[i..]` hangs off `from` the way the
+/// combinators say (the first one is the leading combinator of a `:has()`).
+bool hasMatch(const std::vector<SelectorPart> &parts, size_t i, const Dom &dom,
+              int from)
+{
+    char comb = parts[i].combinator;
+    if (comb == 0)
+    {
+        comb = ' ';
+    }
+
+    std::vector<int> candidates;
+    const Node &node = dom.nodes[static_cast<size_t>(from)];
+    switch (comb)
+    {
+        case '+':
+        case '~': {
+            const auto siblings = siblingsOf(dom, from);
+            const size_t pos = static_cast<size_t>(node.pos);
+            if (node.parent >= 0)
             {
-                return false;
-            }
-            if (contains(c.classes, "user") || contains(c.classes, "text") ||
-                contains(c.classes, "emote"))
-            {
-                return false;
-            }
-            if (!isSubset(c.classes, node.classes))
-            {
-                return false;
-            }
-            for (const auto &attr : c.attrs)
-            {
-                if (attr.name != "data-username" || attr.op != "=" ||
-                    attr.value != node.username)
+                if (comb == '+' && pos + 1 < siblings.size())
                 {
-                    return false;
+                    candidates.push_back(siblings[pos + 1]);
+                }
+                else if (comb == '~')
+                {
+                    for (size_t k = pos + 1; k < siblings.size(); k++)
+                    {
+                        candidates.push_back(siblings[k]);
+                    }
                 }
             }
+            break;
+        }
+        case '>':
+            candidates = dom.children[static_cast<size_t>(from)];
+            break;
+        default: {
+            std::vector<int> stack = dom.children[static_cast<size_t>(from)];
+            while (!stack.empty())
+            {
+                const int next = stack.back();
+                stack.pop_back();
+                candidates.push_back(next);
+                for (const int child : dom.children[static_cast<size_t>(next)])
+                {
+                    stack.push_back(child);
+                }
+            }
+            break;
+        }
+    }
+
+    for (const int candidate : candidates)
+    {
+        if (!compoundMatches(parts[i].compound, dom, candidate))
+        {
+            continue;
+        }
+        if (i + 1 == parts.size() || hasMatch(parts, i + 1, dom, candidate))
+        {
             return true;
         }
-        case 'U':
-            return contains(c.classes, "user") && c.attrs.empty() &&
-                   isSubset(c.classes, node.classes);
-        case 'T':
-            return c.classes.size() == 1 && c.classes[0] == "text" &&
-                   c.attrs.empty();
-        case 'E':
-            return c.attrs.empty() && isSubset(c.classes, node.classes);
+    }
+    return false;
+}
+
+bool evalPseudo(const PseudoClass &pc, const Dom &dom, int nodeIndex)
+{
+    using Kind = PseudoClass::Kind;
+
+    switch (pc.kind)
+    {
+        case Kind::Not:
+            return std::none_of(
+                pc.args.begin(), pc.args.end(), [&](const ComplexSelector &a) {
+                    return matchChain(a.parts, a.parts.size() - 1, dom,
+                                      nodeIndex);
+                });
+        case Kind::Is:
+            return std::any_of(
+                pc.args.begin(), pc.args.end(), [&](const ComplexSelector &a) {
+                    return matchChain(a.parts, a.parts.size() - 1, dom,
+                                      nodeIndex);
+                });
+        case Kind::Has:
+            return std::any_of(
+                pc.args.begin(), pc.args.end(), [&](const ComplexSelector &a) {
+                    return hasMatch(a.parts, 0, dom, nodeIndex);
+                });
+        default:
+            break;
+    }
+
+    const Node &node = dom.nodes[static_cast<size_t>(nodeIndex)];
+    const auto siblings = siblingsOf(dom, nodeIndex);
+    int position = 1;  // 1-based, among all siblings
+    int count = static_cast<int>(siblings.size());
+    int typedPosition = 0;
+    int typedCount = 0;
+    for (const int sibling : siblings)
+    {
+        const bool sameType = dom.nodes[static_cast<size_t>(sibling)].tag ==
+                              node.tag;
+        if (sameType)
+        {
+            typedCount++;
+        }
+        if (sibling == nodeIndex)
+        {
+            position = static_cast<int>(&sibling - siblings.data()) + 1;
+            typedPosition = typedCount;
+        }
+    }
+
+    switch (pc.kind)
+    {
+        case Kind::FirstChild:
+            return position == 1;
+        case Kind::LastChild:
+            return position == count;
+        case Kind::OnlyChild:
+            return count == 1;
+        case Kind::FirstOfType:
+            return typedPosition == 1;
+        case Kind::LastOfType:
+            return typedPosition == typedCount;
+        case Kind::OnlyOfType:
+            return typedCount == 1;
+        case Kind::NthChild:
+            return nthMatches(pc.a, pc.b, position);
+        case Kind::NthLastChild:
+            return nthMatches(pc.a, pc.b, count - position + 1);
+        case Kind::NthOfType:
+            return nthMatches(pc.a, pc.b, typedPosition);
+        case Kind::NthLastOfType:
+            return nthMatches(pc.a, pc.b, typedCount - typedPosition + 1);
         default:
             return false;
     }
+}
+
+bool compoundMatches(const Compound &c, const Dom &dom, int nodeIndex)
+{
+    const Node &node = dom.nodes[static_cast<size_t>(nodeIndex)];
+
+    bool matches = false;
+    switch (node.kind)
+    {
+        case 'M': {
+            matches = true;
+            if (c.classes.empty() && c.attrs.empty())
+            {
+                matches = false;
+            }
+            else if (contains(c.classes, "user") ||
+                     contains(c.classes, "text") ||
+                     contains(c.classes, "emote") ||
+                     contains(c.classes, "greentext"))
+            {
+                matches = false;
+            }
+            else if (!isSubset(c.classes, node.classes))
+            {
+                matches = false;
+            }
+            else
+            {
+                for (const auto &attr : c.attrs)
+                {
+                    if (attr.name != "data-username" || attr.op != "=" ||
+                        attr.value != node.username)
+                    {
+                        matches = false;
+                        break;
+                    }
+                }
+            }
+            break;
+        }
+        case 'U':
+            matches = contains(c.classes, "user") && c.attrs.empty() &&
+                      isSubset(c.classes, node.classes);
+            break;
+        case 'T':
+            matches = c.classes.size() == 1 && c.classes[0] == "text" &&
+                      c.attrs.empty();
+            break;
+        case 'G':
+            matches = c.classes.size() == 1 && c.classes[0] == "greentext" &&
+                      c.attrs.empty();
+            break;
+        case 'E':
+        case 'L':
+            matches = c.attrs.empty() && isSubset(c.classes, node.classes);
+            break;
+        default:
+            break;
+    }
+    if (!matches)
+    {
+        return false;
+    }
+
+    return std::all_of(c.structural.begin(), c.structural.end(),
+                       [&](const PseudoClass &pc) {
+                           return evalPseudo(pc, dom, nodeIndex);
+                       });
 }
 
 bool matchChain(const std::vector<SelectorPart> &parts, size_t index,
                 const Dom &dom, int nodeIndex)
 {
     const Node &node = dom.nodes[static_cast<size_t>(nodeIndex)];
-    if (!compoundMatches(parts[index].compound, node))
+    if (!compoundMatches(parts[index].compound, dom, nodeIndex))
     {
         return false;
     }
@@ -954,11 +1487,33 @@ bool matchChain(const std::vector<SelectorPart> &parts, size_t index,
         case '>':
             return node.parent >= 0 &&
                    matchChain(parts, index - 1, dom, node.parent);
-        case '~':
-            return std::any_of(node.previousSiblings.begin(),
-                               node.previousSiblings.end(), [&](int s) {
-                                   return matchChain(parts, index - 1, dom, s);
-                               });
+        case '+': {
+            if (node.parent < 0 || node.pos == 0)
+            {
+                return false;
+            }
+            const auto &siblings =
+                dom.children[static_cast<size_t>(node.parent)];
+            return matchChain(parts, index - 1, dom,
+                              siblings[static_cast<size_t>(node.pos - 1)]);
+        }
+        case '~': {
+            if (node.parent < 0)
+            {
+                return false;
+            }
+            const auto &siblings =
+                dom.children[static_cast<size_t>(node.parent)];
+            for (int k = 0; k < node.pos; k++)
+            {
+                if (matchChain(parts, index - 1, dom,
+                               siblings[static_cast<size_t>(k)]))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
         default:
             return false;
     }
@@ -1682,6 +2237,117 @@ void bakeAnimations(const Props &props, const Keyframes &keyframes,
     style.sprite.restPose = poseOf(baked->rest, box);
 }
 
+/// `transform` without its `translate*()` functions: a shift would push part
+/// of the frame out of its box, where it is cut off (chat-gui lets it
+/// overflow instead).
+string withoutTranslations(string_view transform)
+{
+    string out;
+    size_t i = 0;
+    while (i < transform.size())
+    {
+        if (transform.compare(i, 9, "translate") == 0)
+        {
+            const size_t open = transform.find('(', i);
+            if (open != string_view::npos)
+            {
+                int depth = 0;
+                size_t j = open;
+                for (; j < transform.size(); j++)
+                {
+                    if (transform[j] == '(')
+                    {
+                        depth++;
+                    }
+                    else if (transform[j] == ')' && --depth == 0)
+                    {
+                        break;
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push_back(transform[i]);
+        i++;
+    }
+    return out;
+}
+
+/// An emote that steps through the frames of a sprite sheet can't have its
+/// `transform` animated as well (see bakeAnimations()), but a plain
+/// `transform` that stays the same, such as the `scale(-1, 1)` that makes one
+/// of two neighbouring Chatting emotes face the other, can be drawn on every
+/// frame.
+void applyStaticTransform(const Props &props, DggEmoteStyle &style,
+                          std::vector<string> &notes)
+{
+    if (style.sprite.hasPoses() || style.sprite.offsets.size() < 2)
+    {
+        return;
+    }
+    const auto it = props.find("transform");
+    if (it == props.end())
+    {
+        return;
+    }
+    const auto resolved = resolveVars(it->second, props);
+    if (!resolved)
+    {
+        return;
+    }
+    const string text = withoutTranslations(*resolved);
+    if (trimView(text).empty() || trimView(text) == "none")
+    {
+        return;
+    }
+
+    anim::Computed base;
+    if (auto parsed = anim::parseDeclaration("transform", text))
+    {
+        anim::setProp(base, parsed->first, std::move(parsed->second));
+    }
+    else
+    {
+        notes.push_back("transform (not understood): " + *resolved);
+        return;
+    }
+    if (const auto origin = props.find("transform-origin");
+        origin != props.end())
+    {
+        if (const auto value = resolveVars(origin->second, props))
+        {
+            if (auto parsed =
+                    anim::parseDeclaration("transform-origin", *value))
+            {
+                anim::setProp(base, parsed->first, std::move(parsed->second));
+            }
+        }
+    }
+    for (const auto &filter : style.sprite.filters)
+    {
+        base.filter.push_back(anim::FilterFn{
+            .kind = static_cast<anim::FilterKind>(filter.kind),
+            .amount = filter.amount,
+        });
+    }
+
+    const anim::Box box{
+        .width = static_cast<double>(style.frameSize.width()),
+        .height = static_cast<double>(style.frameSize.height()),
+    };
+    const SpritePose pose = poseOf(base, box);
+    if (pose.isIdentity())
+    {
+        return;
+    }
+
+    style.sprite.poses.assign(style.sprite.offsets.size(), pose);
+    style.sprite.restPose = pose;
+    // the pose carries the element's filters
+    style.sprite.filters.clear();
+}
+
 DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
                            QSize sheetSize)
 {
@@ -1945,8 +2611,10 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
         }
     }
     bakeAnimations(props, keyframes, style, notes);
+    applyStaticTransform(props, style, notes);
 
-    // A `transform` is only reproduced where an animation moves it
+    // A `transform` is only reproduced where an animation moves it or, for a
+    // sprite animation, where it stays the same (without its translation)
     std::vector<const char *> ignoredProps{"mask-image", "mix-blend-mode"};
     if (!style.sprite.hasPoses())
     {
@@ -1976,7 +2644,7 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
 
 bool DggEmoteStyle::isWholeImage(QSize sheetSize) const
 {
-    return this->valid && !sheetSize.isEmpty() &&
+    return this->valid && !sheetSize.isEmpty() && !this->sprite.hasPoses() &&
            this->sprite.offsets.size() == 1 &&
            this->sprite.offsets[0] == QPoint(0, 0) &&
            this->frameSize == sheetSize && this->sprite.filters.empty();

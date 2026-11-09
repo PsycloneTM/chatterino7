@@ -57,6 +57,12 @@ public:
     /// Matching is case-sensitive and on whole words only, like chat-gui.
     EmotePtr emoteFor(QStringView word, const DggUser &user) const;
 
+    /// Whether `word` is an emote that `user` may use, without building
+    /// anything. Used to work out which elements a message has before the
+    /// emotes are styled (selectors such as `.emote + .emote.Chatting` look at
+    /// the neighbours).
+    bool isEmoteFor(QStringView word, const DggUser &user) const;
+
     /// Like above, but the emote looks the way the stylesheet makes it look
     /// in a message in `context` (which part of its image, what size, which
     /// colours: it depends on who wrote the message).

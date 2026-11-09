@@ -35,6 +35,20 @@ struct DggEmoteContext {
     /// `msg-historical` for one that came out of the backlog.
     QStringList messageClasses;
 
+    /// The elements that sit directly inside the message's text, in order:
+    /// the name of the emote for an emote, an empty string for anything else
+    /// that is an element in chat-gui's markup (a link). Words that are
+    /// plain text are not elements. This is what selectors such as
+    /// `.emote + .emote.Chatting` look at. Empty (with `elementIndex` -1)
+    /// stands for a message that only holds the emote itself.
+    QStringList elements;
+
+    /// Which of `elements` is the emote being styled.
+    int elementIndex = -1;
+
+    /// The text is greentext (the elements are then inside `.greentext`).
+    bool greentext = false;
+
     /// The only flair class chat-gui puts on the nick: the one that colours
     /// it (`usernameColorFlair`). Empty if there is none. Note that this is
     /// *not* every flair the user has, which is what `messageClasses` holds.
@@ -65,6 +79,7 @@ struct DggEmoteStyle {
     bool isScaledWholeImage() const
     {
         return this->valid && !this->backgroundSize.isEmpty() &&
+               !this->sprite.hasPoses() &&
                this->sprite.offsets.size() == 1 &&
                this->sprite.offsets[0] == QPoint(0, 0) &&
                this->sprite.filters.empty();
@@ -104,18 +119,59 @@ struct Attr {
     std::string value;
 };
 
+struct PseudoClass;
+
 /// Like `div.a.b[c=d]:hover`, without the element name.
 struct Compound {
     std::vector<std::string> classes;
     std::vector<Attr> attrs;
+    /// The raw text of every pseudo-class / pseudo-element (`:hover`,
+    /// `:not(.a)`, ...).
     std::vector<std::string> pseudos;
+    /// The pseudo-classes of `pseudos` that are evaluated against the
+    /// message's elements (everything but `:hover`).
+    std::vector<PseudoClass> structural;
 };
 
 struct SelectorPart {
     /// The combinator between the previous part and this one: ` `, `>`, `~`
-    /// or `+`. Meaningless (0) for the first part.
+    /// or `+`. Meaningless (0) for the first part of a rule. For the first
+    /// part of a `:has()` argument it's the leading combinator (0: any
+    /// descendant).
     char combinator = 0;
     Compound compound;
+};
+
+/// A complex selector: `a + b > c`.
+struct ComplexSelector {
+    std::vector<SelectorPart> parts;
+};
+
+/// `:not()`, `:is()`, `:has()` and the structural pseudo-classes
+/// (`:first-child`, `:nth-of-type(2n)`, ...).
+struct PseudoClass {
+    enum class Kind {
+        Not,
+        Is,
+        Has,
+        FirstChild,
+        LastChild,
+        OnlyChild,
+        FirstOfType,
+        LastOfType,
+        OnlyOfType,
+        NthChild,
+        NthLastChild,
+        NthOfType,
+        NthLastOfType,
+    };
+
+    Kind kind = Kind::Is;
+    /// `an + b` of the `:nth-*` ones.
+    int a = 0;
+    int b = 0;
+    /// The arguments of `:not()`, `:is()` and `:has()`.
+    std::vector<ComplexSelector> args;
 };
 
 /// A style rule for one selector of a rule's selector list. Only selectors
@@ -159,6 +215,9 @@ struct KeyframeStop {
 ///    keywords), `animation` with `@keyframes` that move
 ///    `background-position` and a `steps()` timing function, `filter`
 ///    (colour functions only) and custom properties with `var()`;
+///  - neighbours: `+` and `~` between emotes, `:not()`, `:is()`, `:has()` and
+///    the structural pseudo-classes, evaluated against the elements of the
+///    message (`DggEmoteContext::elements`);
 ///  - the cascade: specificity, source order and `!important`.
 ///
 /// Everything else is skipped, namely `:hover` rules, pseudo-elements,

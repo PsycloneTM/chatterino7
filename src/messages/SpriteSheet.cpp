@@ -141,6 +141,29 @@ Rgba applyFilter(Rgba px, const SpriteColorFilter &filter)
     return px;
 }
 
+/// The `size` area of `source` at `offset`, with whatever lies outside of
+/// the sheet explicitly transparent. (QImage::copy() is documented to fill
+/// that with zeroes, which is only transparent for some formats; frames that
+/// start or end beyond the sheet, like CuckCrab's pause or SCHEMING's final
+/// position, showed up as black.)
+QImage copyFrame(const QImage &source, QPoint offset, QSize size)
+{
+    QImage out(size, QImage::Format_ARGB32);
+    out.fill(Qt::transparent);
+
+    const QRect wanted(offset, size);
+    const QRect inside = wanted.intersected(source.rect());
+    if (inside.isEmpty())
+    {
+        return out;
+    }
+
+    QPainter painter(&out);
+    painter.setCompositionMode(QPainter::CompositionMode_Source);
+    painter.drawImage(inside.topLeft() - offset, source, inside);
+    return out;
+}
+
 }  // namespace
 
 namespace chatterino {
@@ -349,7 +372,7 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
     out.reserve(count);
     for (size_t i = 0; i < count; i++)
     {
-        QImage frame = source.copy(QRect(spec.offsets[i], spec.frameSize));
+        QImage frame = copyFrame(source, spec.offsets[i], spec.frameSize);
         if (spec.hasPoses())
         {
             frame = applySpritePose(frame, spec.poses[i]);
@@ -370,7 +393,7 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
 
     if (addRest)
     {
-        QImage rest = source.copy(QRect(spec.restOffset, spec.frameSize));
+        QImage rest = copyFrame(source, spec.restOffset, spec.frameSize);
         if (spec.hasPoses())
         {
             rest = applySpritePose(rest, spec.restPose);
