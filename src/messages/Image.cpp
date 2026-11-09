@@ -849,8 +849,8 @@ void Image::actuallyLoad()
             // Keep every native animation frame and apply the filters to each
             // one; reading only the first frame here would silently freeze it.
             const bool fullImageFrame =
-                spec.offsets.size() == 1 && spec.offsets.front() == QPoint(0, 0) &&
-                spec.frameSize == size;
+                !spec.hasPoses() && spec.offsets.size() == 1 &&
+                spec.offsets.front() == QPoint(0, 0) && spec.frameSize == size;
             if (supportsAnimation && fullImageFrame)
             {
                 auto frames =

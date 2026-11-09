@@ -1,5 +1,7 @@
 #include "providers/dgg/DggEmoteCss.hpp"
 
+#include "providers/dgg/DggCssAnimation.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -1189,7 +1191,16 @@ void setProperty(Props &props, const string &name, const string &value)
     if (name == "animation")
     {
         expandAnimation(props, value);
+        // the whole list, for the baking of transform/filter animations (the
+        // expanded properties only keep the first animation)
+        props["animation-raw"] = value;
         return;
+    }
+    if (name.rfind("animation-", 0) == 0 && name != "animation-raw")
+    {
+        // a longhand changes what the shorthand said, so the raw list is no
+        // longer what applies
+        props.erase("animation-raw");
     }
 
     if (name == "background-position")
@@ -1486,6 +1497,191 @@ std::optional<double> keyframePositionX(
 }
 
 /// Evaluates the final property values of one emote.
+namespace anim = dggcss::anim;
+
+static_assert(static_cast<int>(anim::FilterKind::Brightness) ==
+                  static_cast<int>(SpriteColorFilter::Kind::Brightness) &&
+              static_cast<int>(anim::FilterKind::Contrast) ==
+                  static_cast<int>(SpriteColorFilter::Kind::Contrast) &&
+              static_cast<int>(anim::FilterKind::Saturate) ==
+                  static_cast<int>(SpriteColorFilter::Kind::Saturate) &&
+              static_cast<int>(anim::FilterKind::HueRotate) ==
+                  static_cast<int>(SpriteColorFilter::Kind::HueRotate) &&
+              static_cast<int>(anim::FilterKind::Grayscale) ==
+                  static_cast<int>(SpriteColorFilter::Kind::Grayscale) &&
+              static_cast<int>(anim::FilterKind::Sepia) ==
+                  static_cast<int>(SpriteColorFilter::Kind::Sepia) &&
+              static_cast<int>(anim::FilterKind::Invert) ==
+                  static_cast<int>(SpriteColorFilter::Kind::Invert) &&
+              static_cast<int>(anim::FilterKind::Opacity) ==
+                  static_cast<int>(SpriteColorFilter::Kind::Opacity),
+              "anim::FilterKind and SpriteColorFilter::Kind must match");
+
+SpritePose poseOf(const anim::Computed &state, const anim::Box &box)
+{
+    SpritePose pose;
+    const auto m = anim::matrixOf(state, box);
+    pose.matrix = {m.a, m.b, m.c, m.d, m.e, m.f};
+    pose.opacity = state.opacity;
+    for (const auto &fn : state.filter)
+    {
+        pose.filters.push_back(SpriteColorFilter{
+            .kind = static_cast<SpriteColorFilter::Kind>(fn.kind),
+            .amount = fn.amount,
+        });
+    }
+    pose.clip = anim::clipPx(state.clip, box);
+    return pose;
+}
+
+/// Animations of `transform`, `opacity`, `filter` and `clip-path` can't run
+/// in Chatterino, so they are baked: the keyframes are evaluated at a series
+/// of moments, and every moment becomes one frame of the emote (a "pose" on
+/// top of the frame the sheet shows). Only done if the emote has no sprite
+/// animation of its own; the two aren't combined.
+///
+/// Leaves `style` alone (adding a note) if the animations can't be baked.
+void bakeAnimations(const Props &props, const Keyframes &keyframes,
+                    DggEmoteStyle &style, std::vector<string> &notes)
+{
+    const auto rawIt = props.find("animation-raw");
+    if (rawIt == props.end() || style.sprite.offsets.size() != 1)
+    {
+        return;
+    }
+    const auto rawList = resolveVars(rawIt->second, props);
+    if (!rawList || trimView(*rawList) == "none")
+    {
+        return;
+    }
+    const auto specs = anim::parseAnimationList(*rawList);
+    if (!specs)
+    {
+        notes.push_back("animation (not understood): " + *rawList);
+        return;
+    }
+
+    std::vector<anim::Animation> animations;
+    for (const auto &spec : *specs)
+    {
+        if (spec.name.empty() || spec.name == "none")
+        {
+            continue;
+        }
+        const auto found = keyframes.find(spec.name);
+        if (found == keyframes.end())
+        {
+            notes.push_back("animation " + spec.name + ": no @keyframes");
+            continue;
+        }
+
+        std::vector<anim::Keyframe> frames;
+        for (const auto &stop : found->second)
+        {
+            anim::Keyframe frame;
+            frame.offset = stop.percent / 100.0;
+            for (const auto &decl : stop.decls)
+            {
+                const auto value = resolveVars(decl.value, props);
+                frame.decls.push_back(
+                    anim::KeyframeDecl{decl.name, value ? *value : decl.value});
+            }
+            frames.push_back(std::move(frame));
+        }
+
+        string problem;
+        auto built = anim::Animation::build(spec, frames, problem);
+        if (!built)
+        {
+            // e.g. the `background-position` animation of a sprite sheet:
+            // not this path's business
+            if (problem.rfind("keyframe property background-position", 0) != 0)
+            {
+                notes.push_back("animation " + spec.name + ": " + problem);
+            }
+            continue;
+        }
+        animations.push_back(std::move(*built));
+    }
+    if (animations.empty())
+    {
+        return;
+    }
+
+    // What the element looks like when nothing is animated
+    anim::Computed base;
+    for (const char *name : {"transform", "translate", "rotate", "scale",
+                             "opacity", "transform-origin", "clip-path"})
+    {
+        const auto it = props.find(name);
+        if (it == props.end())
+        {
+            continue;
+        }
+        const auto resolved = resolveVars(it->second, props);
+        if (!resolved)
+        {
+            continue;
+        }
+        if (auto parsed = anim::parseDeclaration(name, *resolved))
+        {
+            anim::setProp(base, parsed->first, std::move(parsed->second));
+        }
+    }
+    for (const auto &filter : style.sprite.filters)
+    {
+        base.filter.push_back(anim::FilterFn{
+            .kind = static_cast<anim::FilterKind>(filter.kind),
+            .amount = filter.amount,
+        });
+    }
+
+    const anim::Box box{
+        .width = static_cast<double>(style.frameSize.width()),
+        .height = static_cast<double>(style.frameSize.height()),
+    };
+    string problem;
+    const auto baked =
+        anim::bake(animations, base, box, anim::BakeOptions{}, problem);
+    if (!baked)
+    {
+        notes.push_back("animation baking: " + problem);
+        return;
+    }
+    // what the sprite path had to say about these animations is moot now
+    std::erase_if(notes, [](const string &note) {
+        return note.rfind("animation ", 0) == 0;
+    });
+    if (baked->truncated)
+    {
+        notes.emplace_back("animation baking: cut off after 10 s");
+    }
+
+    auto frames = baked->frames;
+    if (frames.size() == 1)
+    {
+        // a limited animation that only has one distinct moment before it
+        // rests: the second frame is what makes it count as an animation
+        frames.push_back(frames.front());
+    }
+
+    const QPoint offset = style.sprite.offsets.front();
+    style.sprite.offsets.assign(frames.size(), offset);
+    style.sprite.durationsMs.clear();
+    style.sprite.poses.clear();
+    for (const auto &frame : frames)
+    {
+        style.sprite.durationsMs.push_back(frame.durationMs);
+        style.sprite.poses.push_back(poseOf(frame.state, box));
+    }
+    // the poses carry the element's filters
+    style.sprite.filters.clear();
+
+    style.sprite.loopCount = baked->plays;
+    style.sprite.restOffset = offset;
+    style.sprite.restPose = poseOf(baked->rest, box);
+}
+
 DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
                            QSize sheetSize)
 {
@@ -1748,7 +1944,15 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
             }
         }
     }
-    for (const char *ignored : {"transform", "mask-image", "mix-blend-mode"})
+    bakeAnimations(props, keyframes, style, notes);
+
+    // A `transform` is only reproduced where an animation moves it
+    std::vector<const char *> ignoredProps{"mask-image", "mix-blend-mode"};
+    if (!style.sprite.hasPoses())
+    {
+        ignoredProps.push_back("transform");
+    }
+    for (const char *ignored : ignoredProps)
     {
         if (const auto *value = get(ignored); value != nullptr &&
                                               *value != "none")

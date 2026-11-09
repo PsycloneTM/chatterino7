@@ -457,6 +457,8 @@ set(SOURCE_FILES
         providers/dgg/DggChannel.hpp
         providers/dgg/DggChatServer.cpp
         providers/dgg/DggChatServer.hpp
+        providers/dgg/DggCssAnimation.cpp
+        providers/dgg/DggCssAnimation.hpp
         providers/dgg/DggEmoteCss.cpp
         providers/dgg/DggEmoteCss.hpp
         providers/dgg/DggFrame.cpp

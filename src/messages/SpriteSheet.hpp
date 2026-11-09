@@ -6,6 +6,9 @@
 #include <QSize>
 #include <QString>
 
+#include <array>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace chatterino {
@@ -34,6 +37,35 @@ struct SpriteColorFilter {
     double amount = 1.0;
 
     bool operator==(const SpriteColorFilter &) const = default;
+};
+
+/// How one frame is drawn on top of what the sheet shows: what a CSS
+/// animation of `transform`, `opacity`, `filter` and `clip-path` makes of the
+/// emote at one moment (see providers/dgg/DggCssAnimation.hpp, which "bakes"
+/// such animations into a list of these).
+///
+/// Applied in the order of the CSS rendering model: filters, clip, opacity,
+/// transform. The frame is not made bigger, so what a transform moves out of
+/// the frame's box is cut off (chat-gui lets it overflow into its
+/// neighbours).
+struct SpritePose {
+    /// CSS `matrix(a, b, c, d, e, f)` in frame pixels, with the transform
+    /// origin already folded in: x' = a x + c y + e, y' = b x + d y + f.
+    std::array<double, 6> matrix{1, 0, 0, 1, 0, 0};
+
+    double opacity = 1.0;
+
+    /// The colour filters of this moment (the element's own plus whatever
+    /// the animation does to them).
+    std::vector<SpriteColorFilter> filters;
+
+    /// `clip-path: polygon()` in frame pixels. Empty if there is none.
+    std::vector<std::pair<double, double>> clip;
+
+    /// Nothing but (maybe) filters: no transform, opacity or clip.
+    bool isIdentity() const;
+
+    bool operator==(const SpritePose &) const = default;
 };
 
 /// Describes which parts of a (sprite) sheet are shown, in which order and
@@ -68,6 +100,17 @@ struct SpriteSheetSpec {
     /// is above 0.
     QPoint restOffset;
 
+    /// Optional, for emotes whose CSS animates `transform`, `opacity`, `filter`
+    /// or `clip-path`: one pose per entry of `offsets` (so, as many as the
+    /// frames), drawn on top of that frame. Empty for the ordinary case. If
+    /// set, it replaces `filters` (the poses carry the element's own filters
+    /// as well).
+    std::vector<SpritePose> poses;
+
+    /// What the animation rests on after `loopCount` plays, like
+    /// `restOffset` for the sheet. Only used if `poses` is set.
+    SpritePose restPose;
+
     /// Only used to keep specs apart that are otherwise equal. An animation
     /// that plays once starts when its image is loaded, so every message
     /// that should start it again needs an image of its own.
@@ -77,6 +120,11 @@ struct SpriteSheetSpec {
     bool playsOnce() const
     {
         return this->loopCount > 0 && this->offsets.size() > 1;
+    }
+
+    bool hasPoses() const
+    {
+        return !this->poses.empty();
     }
 
     bool isValid() const;
@@ -113,6 +161,10 @@ struct SpriteFrame {
 std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
                                           const SpriteSheetSpec &spec,
                                           qint64 maxBytes);
+
+/// Draws `pose` on `frame`: filters, clip, opacity, transform. The result
+/// has the size of `frame` and is ARGB32.
+QImage applySpritePose(const QImage &frame, const SpritePose &pose);
 
 /// Applies a filter chain to an image (any format; the result is ARGB32).
 QImage applySpriteFilters(const QImage &image,

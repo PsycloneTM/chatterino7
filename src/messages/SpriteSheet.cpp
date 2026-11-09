@@ -2,7 +2,11 @@
 
 #include <QByteArray>
 #include <QCryptographicHash>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPolygonF>
 #include <QRect>
+#include <QTransform>
 
 #include <algorithm>
 #include <array>
@@ -141,11 +145,18 @@ Rgba applyFilter(Rgba px, const SpriteColorFilter &filter)
 
 namespace chatterino {
 
+bool SpritePose::isIdentity() const
+{
+    return this->matrix == std::array<double, 6>{1, 0, 0, 1, 0, 0} &&
+           this->opacity == 1.0 && this->clip.empty();
+}
+
 bool SpriteSheetSpec::isValid() const
 {
     return this->frameSize.width() > 0 && this->frameSize.height() > 0 &&
            !this->offsets.empty() &&
-           this->durationsMs.size() == this->offsets.size();
+           this->durationsMs.size() == this->offsets.size() &&
+           (this->poses.empty() || this->poses.size() == this->offsets.size());
 }
 
 QString SpriteSheetSpec::cacheKey() const
@@ -175,6 +186,42 @@ QString SpriteSheetSpec::cacheKey() const
         blob.append(':');
         blob.append(QByteArray::number(filter.amount, 'g', 10));
         blob.append(';');
+    }
+
+    if (!this->poses.empty())
+    {
+        const auto addPose = [&](const SpritePose &pose) {
+            for (const auto v : pose.matrix)
+            {
+                blob.append(QByteArray::number(v, 'g', 8));
+                blob.append(',');
+            }
+            blob.append(QByteArray::number(pose.opacity, 'g', 8));
+            blob.append('f');
+            for (const auto &filter : pose.filters)
+            {
+                blob.append(QByteArray::number(static_cast<int>(filter.kind)));
+                blob.append(':');
+                blob.append(QByteArray::number(filter.amount, 'g', 8));
+                blob.append(',');
+            }
+            blob.append('c');
+            for (const auto &[x, y] : pose.clip)
+            {
+                blob.append(QByteArray::number(x, 'g', 8));
+                blob.append(',');
+                blob.append(QByteArray::number(y, 'g', 8));
+                blob.append(',');
+            }
+            blob.append(';');
+        };
+        blob.append("|P");
+        for (const auto &pose : this->poses)
+        {
+            addPose(pose);
+        }
+        blob.append('r');
+        addPose(this->restPose);
     }
 
     // Only added when set, so the key of an ordinary (looping) animation
@@ -227,6 +274,54 @@ QImage applySpriteFilters(const QImage &image,
     return out;
 }
 
+QImage applySpritePose(const QImage &frame, const SpritePose &pose)
+{
+    QImage filtered = applySpriteFilters(frame, pose.filters);
+    if (pose.isIdentity())
+    {
+        return filtered;
+    }
+
+    QImage out(filtered.size(), QImage::Format_ARGB32_Premultiplied);
+    out.fill(Qt::transparent);
+
+    QPainter painter(&out);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    if (pose.clip.size() >= 3)
+    {
+        // the polygon is in the element's own coordinates, so it is set
+        // before the transform moves the element
+        QPolygonF polygon;
+        for (const auto &[x, y] : pose.clip)
+        {
+            polygon << QPointF(x, y);
+        }
+        QPainterPath clipPath;
+        clipPath.addPolygon(polygon);
+        clipPath.closeSubpath();
+
+        QImage clipped(filtered.size(), QImage::Format_ARGB32_Premultiplied);
+        clipped.fill(Qt::transparent);
+        {
+            QPainter clipper(&clipped);
+            clipper.setRenderHint(QPainter::Antialiasing, true);
+            clipper.setClipPath(clipPath);
+            clipper.drawImage(0, 0, filtered);
+        }
+        filtered = std::move(clipped);
+    }
+
+    painter.setOpacity(std::clamp(pose.opacity, 0.0, 1.0));
+    const auto &m = pose.matrix;
+    painter.setTransform(QTransform(m[0], m[1], m[2], m[3], m[4], m[5]));
+    painter.drawImage(0, 0, filtered);
+    painter.end();
+
+    return out.convertToFormat(QImage::Format_ARGB32);
+}
+
 std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
                                           const SpriteSheetSpec &spec,
                                           qint64 maxBytes)
@@ -255,7 +350,11 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
     for (size_t i = 0; i < count; i++)
     {
         QImage frame = source.copy(QRect(spec.offsets[i], spec.frameSize));
-        if (!spec.filters.empty())
+        if (spec.hasPoses())
+        {
+            frame = applySpritePose(frame, spec.poses[i]);
+        }
+        else if (!spec.filters.empty())
         {
             frame = applySpriteFilters(frame, spec.filters);
         }
@@ -272,7 +371,11 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
     if (addRest)
     {
         QImage rest = source.copy(QRect(spec.restOffset, spec.frameSize));
-        if (!spec.filters.empty())
+        if (spec.hasPoses())
+        {
+            rest = applySpritePose(rest, spec.restPose);
+        }
+        else if (!spec.filters.empty())
         {
             rest = applySpriteFilters(rest, spec.filters);
         }
