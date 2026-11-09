@@ -81,7 +81,7 @@ TEST(DggManifest, ParsesFlairs)
         {"label":"nameless"}
     ])"));
 
-    ASSERT_EQ(flairs.size(), 3U);
+    ASSERT_EQ(flairs.size(), 4U);
 
     EXPECT_EQ(flairs[0].name, "flair17");
     EXPECT_EQ(flairs[0].label, "Micro");
@@ -209,6 +209,12 @@ TEST(DggManifest, FlairCss)
 }
 .user.flair33 { color: transparent; }
 .msg-chat:not(.msg-whisper) .user.flair33:hover::before { content: ""; }
+.flair.flair127 {
+  background-image: url("6ad2fa78d17d1.png");
+  height: 18px;
+  width: 18px;
+  order: 50;
+}
 .flair.flair4 { width: 20px; }
 )";
 
@@ -236,4 +242,13 @@ TEST(DggManifest, FlairCss)
     EXPECT_EQ(flairs[2].name, "flair33");
     EXPECT_EQ(flairs[2].image.url, "https://example.com/a/flair33.png");
     EXPECT_EQ(flairs[2].image.width, 18);
+
+    // The user-supplied flairs.css has this badge even though flairs.json
+    // does not contain a matching entry.
+    EXPECT_EQ(flairs[3].name, "flair127");
+    EXPECT_EQ(flairs[3].image.url,
+              "https://cdn.destiny.gg/flairs/6ad2fa78d17d1.png");
+    EXPECT_EQ(flairs[3].image.width, 18);
+    EXPECT_EQ(flairs[3].image.height, 18);
+    EXPECT_EQ(flairs[3].order, 50);
 }

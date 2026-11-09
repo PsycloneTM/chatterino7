@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <atomic>
 #include <numeric>
+#include <limits>
 #include <utility>
 
 // Duration between each check of every Image instance
@@ -325,47 +326,74 @@ std::optional<QSize> Frames::frameSize() const
 }
 
 QList<Frame> readFrames(QImageReader &reader, const Url &url,
-                        std::optional<QSize> rescale)
+                        std::optional<QSize> rescale,
+                        qint64 maxBytes = std::numeric_limits<qint64>::max())
 {
     QList<Frame> frames;
-    frames.reserve(reader.imageCount());
+    const int reportedCount = reader.imageCount();
+    const bool supportsAnimation = reader.supportsAnimation();
+    // Some image handlers cannot report their frame count up front. In that
+    // case, keep reading while the handler says another frame is available.
+    // A static image with no count is still one frame.
+    const int frameLimit = reportedCount > 0
+                               ? reportedCount
+                               : (supportsAnimation ? 512 : 1);
+    qint64 decodedBytes = 0;
 
-    for (int index = 0; index < reader.imageCount(); ++index)
+    for (int index = 0; index < frameLimit && reader.canRead(); ++index)
     {
-        auto pixmap = QPixmap::fromImageReader(&reader);
-        if (!pixmap.isNull())
+        QImage image = reader.read();
+        if (image.isNull())
         {
-            // It seems that browsers have special logic for fast animations.
-            // This implements Chrome and Firefox's behavior which uses
-            // a duration of 100 ms for any frames that specify a duration of <= 10 ms.
-            // See http://webkit.org/b/36082 for more information.
-            // https://github.com/SevenTV/chatterino7/issues/46#issuecomment-1010595231
-            int duration = reader.nextImageDelay();
-            if (duration <= 10)
-            {
-                duration = 100;
-            }
-            duration = std::max(20, duration);
-
-            if (rescale)
-            {
-                assert(!isGuiThread());
-                // We're not on the main thread - put some effort into scaling.
-                pixmap = pixmap.scaled(*rescale, Qt::IgnoreAspectRatio,
-                                       Qt::SmoothTransformation);
-            }
-
-            frames.append(Frame{
-                .image = std::move(pixmap),
-                .duration = duration,
-            });
+            break;
         }
+
+        // It seems that browsers have special logic for fast animations.
+        // This implements Chrome and Firefox's behavior which uses a duration
+        // of 100 ms for any frames that specify a duration of <= 10 ms.
+        // See http://webkit.org/b/36082 for more information.
+        // https://github.com/SevenTV/chatterino7/issues/46#issuecomment-1010595231
+        int duration = reader.nextImageDelay();
+        if (duration <= 10)
+        {
+            duration = 100;
+        }
+        duration = std::max(20, duration);
+
+        if (rescale)
+        {
+            assert(!isGuiThread());
+            // We're not on the main thread - put some effort into scaling.
+            image = image.scaled(*rescale, Qt::IgnoreAspectRatio,
+                                 Qt::SmoothTransformation);
+        }
+
+        const qint64 frameBytes = static_cast<qint64>(image.width()) *
+                                  static_cast<qint64>(image.height()) * 4;
+        if (decodedBytes + frameBytes > maxBytes && !frames.empty())
+        {
+            qCDebug(chatterinoImage)
+                << "Stopped decoding animation at the image memory limit for"
+                << url.string << "after" << frames.size() << "frames";
+            break;
+        }
+        decodedBytes += frameBytes;
+        frames.append(Frame{
+            .image = QPixmap::fromImage(std::move(image)),
+            .duration = duration,
+        });
     }
 
     if (frames.empty())
     {
         qCDebug(chatterinoImage) << "Error while reading image" << url.string
                                  << ": '" << reader.errorString() << "'";
+    }
+    else if (supportsAnimation || frames.size() > 1)
+    {
+        qCDebug(chatterinoImage)
+            << "Decoded animated image" << url.string << "as" << frames.size()
+            << "frames (reported" << reportedCount << ")";
     }
 
     return frames;
@@ -755,11 +783,17 @@ void Image::actuallyLoad()
             return;
         }
 
-        // returns 1 for non-animated formats
-        if (reader.imageCount() <= 0)
+        const int reportedFrameCount = reader.imageCount();
+        const bool supportsAnimation = reader.supportsAnimation();
+        qCDebug(chatterinoImage)
+            << "Image decoder" << reader.format() << "size" << size
+            << "frames" << reportedFrameCount << "supports animation"
+            << supportsAnimation << "url" << shared->url().string;
+
+        if (reportedFrameCount <= 0 && !reader.canRead())
         {
             qCDebug(chatterinoImage)
-                << "Error: image has less than 1 frame " << shared->url().string
+                << "Error: image has no readable frame " << shared->url().string
                 << ": " << reader.errorString();
             shared->empty_ = true;
             return;
@@ -767,9 +801,40 @@ void Image::actuallyLoad()
 
         if (shared->sprite_)
         {
-            // A sprite sheet is decoded as a whole, and the frames are cut
-            // out of it. That's done here (and not on the GUI thread) because
-            // it can be a lot of pixels.
+            const auto &spec = *shared->sprite_;
+            // Some emotes are animated GIFs with CSS filters rather than
+            // sprite sheets. In that case the CSS describes one frame at the
+            // origin covering the entire image (mhm is the current example).
+            // Keep every native animation frame and apply the filters to each
+            // one; reading only the first frame here would silently freeze it.
+            const bool fullImageFrame =
+                spec.offsets.size() == 1 && spec.offsets.front() == QPoint(0, 0) &&
+                spec.frameSize == size;
+            if (supportsAnimation && fullImageFrame)
+            {
+                auto frames = detail::readFrames(
+                    reader, shared->url(), std::nullopt, Image::maxBytesRam);
+                if (!spec.filters.empty())
+                {
+                    for (auto &frame : frames)
+                    {
+                        frame.image = QPixmap::fromImage(
+                            applySpriteFilters(frame.image.toImage(), spec.filters));
+                    }
+                }
+                if (frames.empty())
+                {
+                    shared->empty_ = true;
+                    return;
+                }
+                assignFrames(shared, std::move(frames));
+                return;
+            }
+
+            // A static sprite sheet is decoded as a whole, and the frames are
+            // cut out of it. That's done here (and not on the GUI thread)
+            // because it can be a lot of pixels. For animated sprite-sheet
+            // files, the first source frame is still the sheet we slice.
             const QImage sheet = reader.read();
             if (sheet.isNull())
             {
@@ -849,8 +914,10 @@ void Image::actuallyLoad()
             limitedAutoScaleSize(size, shared->autoScale_);
 
         // use "double" to prevent int overflows
+        const int estimatedFrameCount =
+            reportedFrameCount > 0 ? reportedFrameCount : 1;
         if (double(limitedSize.width()) * double(limitedSize.height()) *
-                double(reader.imageCount()) * 4.0 >
+                double(estimatedFrameCount) * 4.0 >
             double(Image::maxBytesRam))
         {
             qCDebug(chatterinoImage) << "image too large in RAM";
@@ -867,7 +934,7 @@ void Image::actuallyLoad()
 
         auto parsed = detail::readFrames(
             reader, shared->url(),
-            makeConditionedOptional(needsLimit, limitedSize));
+            makeConditionedOptional(needsLimit, limitedSize), Image::maxBytesRam);
 
         assignFrames(shared, parsed);
     };

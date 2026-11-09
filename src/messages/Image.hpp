@@ -104,8 +104,10 @@ public:
     /// `Image`, and the frames are cut out of it and animated like the frames
     /// of a GIF. Images with the same URL and spec are shared.
     ///
-    /// Only the first frame of the file at `url` is used, so this isn't for
-    /// animated files.
+    /// For a static sprite sheet only its first source frame is used. When
+    /// `spec` describes one frame at (0, 0) covering the entire source image,
+    /// animated formats such as GIF remain animated and CSS colour filters
+    /// are applied to each native frame.
     static ImagePtr fromSpriteSheet(const Url &url, const SpriteSheetSpec &spec);
 
     const Url &url() const;

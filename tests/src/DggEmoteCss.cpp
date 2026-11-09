@@ -63,6 +63,29 @@ const char *const FIXTURE_CSS = R"CSS(
     margin-top: -32px;
     top: 8px;
 }
+
+.emote.mhm {
+    background-image: url("690f52d51011d.gif");
+    height: 36px;
+    width: 44px;
+}
+.emote.VeryPog {
+    background-image: url("6763272555899.png");
+    height: 34px;
+    width: 34px;
+}
+.emote.DinkDonk {
+    background-image: url("672493a6f2540.png");
+    height: 30px;
+    width: 36px;
+}
+.emote.mhm {
+  transform-origin: bottom;
+  transform: scale(calc(28/36));
+  filter: hue-rotate(-30deg);
+  margin-left: -5px;
+  margin-right: -5px;
+}
 @keyframes Askers-anim {
   100% { background-position: -5544px; }
 }
@@ -274,8 +297,46 @@ int totalMs(const DggEmoteStyle &style)
 TEST(DggEmoteCss, ParsesTheFixture)
 {
     EXPECT_FALSE(css().isEmpty());
-    EXPECT_EQ(css().stats().emotes, 6U);
+    EXPECT_EQ(css().stats().emotes, 9U);
     EXPECT_EQ(css().stats().unsupportedRules, 0U);
+}
+
+TEST(DggEmoteCss, MhmKeepsFullGifFrameAndItsCssFilter)
+{
+    const auto style = css().resolve(QStringLiteral("mhm"),
+                                     userContext("someone"), QSize(44, 36));
+    ASSERT_TRUE(style.valid);
+    EXPECT_EQ(style.frameSize, QSize(44, 36));
+    ASSERT_EQ(style.sprite.offsets.size(), 1U);
+    EXPECT_EQ(style.sprite.offsets.front(), QPoint(0, 0));
+    EXPECT_FALSE(style.animated());
+    ASSERT_EQ(style.sprite.filters.size(), 1U);
+    EXPECT_EQ(style.sprite.filters.front().kind, SpriteColorFilter::Kind::HueRotate);
+    EXPECT_EQ(style.sprite.filters.front().amount, -30.0);
+    // A filter makes it a processed whole-image animation, not a sprite sheet.
+    EXPECT_FALSE(style.isWholeImage(QSize(44, 36)));
+}
+
+TEST(DggEmoteCss, VeryPogAndDinkDonkRemainNativeAnimatedImageAssets)
+{
+    // These two emotes are expected to animate. Their current manifest/CSS
+    // snapshot describes each complete image, not a CSS sprite strip. Keep
+    // them on Image::fromUrl so Chatterino's native image reader can play
+    // multi-frame PNG/APNG assets instead of flattening them through the
+    // sprite-sheet path.
+    const auto veryPog = css().resolve(QStringLiteral("VeryPog"),
+                                       userContext("someone"), QSize(34, 34));
+    ASSERT_TRUE(veryPog.valid);
+    EXPECT_EQ(veryPog.frameSize, QSize(34, 34));
+    EXPECT_TRUE(veryPog.sprite.filters.empty());
+    EXPECT_TRUE(veryPog.isWholeImage(QSize(34, 34)));
+
+    const auto dinkDonk = css().resolve(QStringLiteral("DinkDonk"),
+                                        userContext("someone"), QSize(36, 30));
+    ASSERT_TRUE(dinkDonk.valid);
+    EXPECT_EQ(dinkDonk.frameSize, QSize(36, 30));
+    EXPECT_TRUE(dinkDonk.sprite.filters.empty());
+    EXPECT_TRUE(dinkDonk.isWholeImage(QSize(36, 30)));
 }
 
 TEST(DggEmoteCss, UnknownEmoteHasNoStyle)
