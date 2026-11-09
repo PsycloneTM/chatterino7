@@ -310,22 +310,46 @@ void DggAssets::applyFlairs(const QJsonArray &json)
 
 void DggAssets::applyFlairCss(const QString &css)
 {
-    auto defs = parseDggFlairCss(css, FLAIRS_CSS_URL);
-    if (defs.empty())
+    if (css.trimmed().isEmpty())
     {
         // Keep what we had, like for the manifests.
-        qCWarning(chatterinoDgg) << "The flair stylesheet has no flair images";
+        qCWarning(chatterinoDgg) << "The flair stylesheet is empty";
         return;
     }
 
-    qCDebug(chatterinoDgg) << "Loaded" << defs.size()
-                           << "flair images from the stylesheet";
-    this->cssFlairs_ = std::move(defs);
+    // Parsed in rebuildBadges: the image URLs in it are relative, and which
+    // directory they belong to is only known once the manifest has arrived.
+    this->flairCss_ = css;
     this->rebuildBadges();
 }
 
 void DggAssets::rebuildBadges()
 {
+    // The stylesheet's `url("abc.png")` is relative to a *versioned* directory
+    // (the manifest says `https://cdn.destiny.gg/4.50.1/flairs/abc.png`).
+    // Resolving against the unversioned stylesheet URL gives a 404, which is
+    // why CSS-only flairs like flair127 showed nothing. Take the directory
+    // from any image in the manifest.
+    QString cssBase = FLAIRS_CSS_URL;
+    for (const auto &def : this->flairs_)
+    {
+        const auto &url = def.image.url;
+        const auto slash = url.lastIndexOf(u'/');
+        if (def.image.isValid() && slash > 0)
+        {
+            cssBase = url.left(slash + 1);
+            break;
+        }
+    }
+    this->cssFlairs_.clear();
+    if (!this->flairCss_.isEmpty())
+    {
+        this->cssFlairs_ = parseDggFlairCss(this->flairCss_, cssBase);
+        qCDebug(chatterinoDgg) << "Loaded" << this->cssFlairs_.size()
+                               << "flair images from the stylesheet, base"
+                               << cssBase;
+    }
+
     StringMap<EmotePtr> badges;
     for (const auto &def : this->flairs_)
     {

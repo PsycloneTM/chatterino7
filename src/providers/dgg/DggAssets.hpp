@@ -143,6 +143,9 @@ private:
 
     /// Flairs that have an image in `flairs.css`. The manifest misses some.
     std::vector<DggFlairDef> cssFlairs_;
+
+    /// The raw `flairs.css`; parsed again whenever the manifest changes.
+    QString flairCss_;
     StringMap<EmotePtr> badges_;
 
     /// CSS `order` of the badges that have one, by flair name.

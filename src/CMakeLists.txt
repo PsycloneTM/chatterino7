@@ -379,6 +379,8 @@ set(SOURCE_FILES
         messages/Image.hpp
         messages/ImageSet.cpp
         messages/ImageSet.hpp
+        messages/ApngDecoder.cpp
+        messages/ApngDecoder.hpp
         messages/SpriteSheet.cpp
         messages/SpriteSheet.hpp
         messages/Link.cpp

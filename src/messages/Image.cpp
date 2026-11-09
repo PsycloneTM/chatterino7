@@ -12,6 +12,7 @@
 #include "controllers/emotes/EmoteController.hpp"
 #include "debug/AssertInGuiThread.hpp"
 #include "debug/Benchmark.hpp"
+#include "messages/ApngDecoder.hpp"
 #include "singletons/helper/GifTimer.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/DebugCount.hpp"
@@ -42,46 +43,6 @@ const auto IMAGE_POOL_CLEANUP_INTERVAL = std::chrono::minutes(1);
 const auto IMAGE_POOL_IMAGE_LIFETIME = std::chrono::minutes(10);
 
 namespace {
-
-/// APNG files keep the PNG signature and commonly use a `.png` URL. Qt's
-/// regular PNG handler can therefore win format autodetection and return only
-/// the default image. Detect the APNG animation-control chunk (`acTL`) and
-/// explicitly select an installed APNG image plugin when one is available.
-bool hasApngAnimationControlChunk(const QByteArray &data)
-{
-    static constexpr unsigned char PNG_SIGNATURE[] = {
-        0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A,
-    };
-    if (data.size() < 8 ||
-        std::memcmp(data.constData(), PNG_SIGNATURE, sizeof(PNG_SIGNATURE)) != 0)
-    {
-        return false;
-    }
-
-    qsizetype offset = 8;
-    while (offset + 12 <= data.size())
-    {
-        const auto *chunk = reinterpret_cast<const unsigned char *>(
-            data.constData() + offset);
-        const quint32 length = (quint32(chunk[0]) << 24) |
-                               (quint32(chunk[1]) << 16) |
-                               (quint32(chunk[2]) << 8) | quint32(chunk[3]);
-        if (quint64(length) + 12 > quint64(data.size() - offset))
-        {
-            return false;
-        }
-        if (std::memcmp(chunk + 4, "acTL", 4) == 0)
-        {
-            return true;
-        }
-        if (std::memcmp(chunk + 4, "IEND", 4) == 0)
-        {
-            break;
-        }
-        offset += static_cast<qsizetype>(length) + 12;
-    }
-    return false;
-}
 
 /// A sprite animation that plays this often or more is cut off here (the frames
 /// are kept in a list, once per play).
@@ -808,27 +769,24 @@ void Image::actuallyLoad()
         QBuffer buffer;
         buffer.setData(result.getData());
         QImageReader reader(&buffer);
-        const bool isApng = hasApngAnimationControlChunk(buffer.data());
-        if (isApng)
+
+        // Qt's PNG handler only returns the default image of an APNG, and the
+        // third-party `apng` plugin isn't deployed with Chatterino. Decode
+        // APNGs ourselves; the result is treated like any other animated image.
+        std::optional<ApngAnimation> apng;
+        if (isApng(buffer.data()))
         {
-            // APNG shares the PNG signature and URL extension. Force the
-            // dedicated plugin so the regular PNG handler cannot flatten it
-            // to its default image. The plugin must be deployed with Qt.
-            const auto formats = QImageReader::supportedImageFormats();
-            if (formats.contains(QByteArrayLiteral("apng")))
-            {
-                reader.setFormat(QByteArrayLiteral("apng"));
-            }
-            else
+            apng = decodeApng(buffer.data(), Image::maxBytesRam);
+            if (!apng || apng->frames.size() < 2)
             {
                 qCWarning(chatterinoImage)
-                    << "APNG image received but no APNG image plugin is installed;"
-                    << "falling back to PNG still frame:" << shared->url().string;
-                reader.setFormat(QByteArrayLiteral("png"));
+                    << "APNG could not be decoded, showing the still image:"
+                    << shared->url().string;
+                apng.reset();
             }
         }
 
-        if (!reader.canRead())
+        if (!apng && !reader.canRead())
         {
             qCDebug(chatterinoImage)
                 << "Error: image cant be read " << shared->url().string;
@@ -836,21 +794,44 @@ void Image::actuallyLoad()
             return;
         }
 
-        const auto size = reader.size();
+        const auto size = apng ? apng->size : reader.size();
         if (size.isEmpty())
         {
             shared->empty_ = true;
             return;
         }
 
-        const int reportedFrameCount = reader.imageCount();
-        const bool supportsAnimation = reader.supportsAnimation();
+        const int reportedFrameCount =
+            apng ? int(apng->frames.size()) : reader.imageCount();
+        const bool supportsAnimation =
+            apng ? true : reader.supportsAnimation();
         qCDebug(chatterinoImage)
-            << "Image decoder" << reader.format() << "size" << size
-            << "frames" << reportedFrameCount << "supports animation"
-            << supportsAnimation << "url" << shared->url().string;
+            << "Image decoder" << (apng ? QByteArray("apng (built-in)") : reader.format())
+            << "size" << size << "frames" << reportedFrameCount
+            << "supports animation" << supportsAnimation << "url"
+            << shared->url().string;
 
-        if (reportedFrameCount <= 0 && !reader.canRead())
+        // The frames of a decoded APNG as `Frame`s (optionally scaled down)
+        const auto apngFrames = [&](std::optional<QSize> rescale) {
+            QList<detail::Frame> frames;
+            frames.reserve(apng->frames.size());
+            for (const auto &f : apng->frames)
+            {
+                QImage image = f.image;
+                if (rescale)
+                {
+                    image = image.scaled(*rescale, Qt::IgnoreAspectRatio,
+                                         Qt::SmoothTransformation);
+                }
+                frames.append(detail::Frame{
+                    .image = QPixmap::fromImage(std::move(image)),
+                    .duration = f.durationMs,
+                });
+            }
+            return frames;
+        };
+
+        if (!apng && reportedFrameCount <= 0 && !reader.canRead())
         {
             qCDebug(chatterinoImage)
                 << "Error: image has no readable frame " << shared->url().string
@@ -872,8 +853,10 @@ void Image::actuallyLoad()
                 spec.frameSize == size;
             if (supportsAnimation && fullImageFrame)
             {
-                auto frames = detail::readFrames(
-                    reader, shared->url(), std::nullopt, Image::maxBytesRam);
+                auto frames =
+                    apng ? apngFrames(std::nullopt)
+                         : detail::readFrames(reader, shared->url(),
+                                              std::nullopt, Image::maxBytesRam);
                 if (!spec.filters.empty())
                 {
                     for (auto &frame : frames)
@@ -895,7 +878,8 @@ void Image::actuallyLoad()
             // cut out of it. That's done here (and not on the GUI thread)
             // because it can be a lot of pixels. For animated sprite-sheet
             // files, the first source frame is still the sheet we slice.
-            const QImage sheet = reader.read();
+            const QImage sheet =
+                apng ? apng->frames.front().image : reader.read();
             if (sheet.isNull())
             {
                 qCDebug(chatterinoImage)
@@ -992,9 +976,12 @@ void Image::actuallyLoad()
             return;
         }
 
-        auto parsed = detail::readFrames(
-            reader, shared->url(),
-            makeConditionedOptional(needsLimit, limitedSize), Image::maxBytesRam);
+        auto parsed =
+            apng ? apngFrames(makeConditionedOptional(needsLimit, limitedSize))
+                 : detail::readFrames(
+                       reader, shared->url(),
+                       makeConditionedOptional(needsLimit, limitedSize),
+                       Image::maxBytesRam);
 
         // Native animated images (GIF/APNG/etc.) loop continuously. CSS
         // one-shot behavior is applied only to explicitly parsed sprite sheets.
