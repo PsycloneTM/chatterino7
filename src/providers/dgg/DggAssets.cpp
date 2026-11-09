@@ -10,6 +10,7 @@
 
 #include <QDateTime>
 #include <QJsonArray>
+#include <QRegularExpression>
 #include <QSize>
 #include <QUrl>
 
@@ -34,8 +35,33 @@ std::vector<QString> cdnUrls(const QString &path)
     const auto stamp = QDateTime::currentSecsSinceEpoch() / 60;
     return {
         QString(NEW_CDN) + path + u"?_="_s + QString::number(stamp),
+        QString(NEW_CDN) + path,
         QString(OLD_CDN) + path,
     };
+}
+
+/// Moves an image URL of the old host to the new one. The old host keeps its
+/// files in a versioned directory (`/4.68.0/emotes/x.gif`), the new one
+/// doesn't (`/emotes/x.gif`). URLs that already point elsewhere stay as is.
+/// Flip `REWRITE_IMAGE_HOSTS` to false to use the URLs of the manifests as
+/// they are.
+constexpr bool REWRITE_IMAGE_HOSTS = true;
+
+QString toNewCdn(const QString &url)
+{
+    if (!REWRITE_IMAGE_HOSTS)
+    {
+        return url;
+    }
+    QUrl parsed(url);
+    if (parsed.host() != u"cdn.destiny.gg")
+    {
+        return url;
+    }
+    static const QRegularExpression version(QStringLiteral(R"(^/\d+\.\d+\.\d+(?=/))"));
+    parsed.setHost(QStringLiteral("r2cdn.destiny.gg"));
+    parsed.setPath(parsed.path().remove(version));
+    return parsed.toString();
 }
 
 QString directoryOf(const QString &url)
@@ -177,19 +203,30 @@ namespace {
 
 void fetchFirst(std::shared_ptr<const std::vector<QString>> urls, size_t index,
                 std::weak_ptr<bool> weak,
-                std::function<void(NetworkResult, const QString &)> onData,
+                std::function<bool(NetworkResult, const QString &)> onData,
                 std::function<void()> done)
 {
     const QString url = (*urls)[index];
 
     NetworkRequest(QUrl(url))
         .timeout(REQUEST_TIMEOUT_MS)
-        .onSuccess([weak, url, onData, done](NetworkResult result) {
+        .onSuccess([weak, urls, index, url, onData, done](NetworkResult result) {
             if (weak.expired())
             {
                 return;
             }
-            onData(std::move(result), url);
+            if (onData(std::move(result), url))
+            {
+                done();
+                return;
+            }
+            // Answered, but with nothing we can use: try the next one
+            qCWarning(chatterinoDgg) << "Unusable answer from" << url;
+            if (index + 1 < urls->size())
+            {
+                fetchFirst(urls, index + 1, weak, onData, done);
+                return;
+            }
             done();
         })
         .onError([weak, urls, index, url, onData, done](NetworkResult result) {
@@ -219,7 +256,14 @@ void DggAssets::fetchText(
         std::make_shared<const std::vector<QString>>(std::move(urls)), 0,
         this->alive_,
         [onData = std::move(onData)](NetworkResult result, const QString &url) {
-            onData(QString::fromUtf8(result.getData()), url);
+            const auto text = QString::fromUtf8(result.getData());
+            qCDebug(chatterinoDgg) << "Loaded" << url << text.size() << "chars";
+            if (text.trimmed().isEmpty())
+            {
+                return false;
+            }
+            onData(text, url);
+            return true;
         },
         [this] {
             this->onFetchFinished();
@@ -232,8 +276,16 @@ void DggAssets::fetch(std::vector<QString> urls,
     fetchFirst(
         std::make_shared<const std::vector<QString>>(std::move(urls)), 0,
         this->alive_,
-        [onData = std::move(onData)](NetworkResult result, const QString &) {
-            onData(result.parseJsonArray());
+        [onData = std::move(onData)](NetworkResult result, const QString &url) {
+            const auto json = result.parseJsonArray();
+            qCDebug(chatterinoDgg) << "Loaded" << url << json.size()
+                                   << "entries";
+            if (json.isEmpty())
+            {
+                return false;
+            }
+            onData(json);
+            return true;
         },
         [this] {
             this->onFetchFinished();
@@ -270,6 +322,7 @@ void DggAssets::applyEmotes(const QJsonArray &json)
     emotes.reserve(defs.size());
     for (auto &def : defs)
     {
+        def.image.url = toNewCdn(def.image.url);
         if (!def.image.isValid())
         {
             continue;
@@ -346,6 +399,11 @@ void DggAssets::applyFlairs(const QJsonArray &json)
         return;
     }
 
+    for (auto &def : defs)
+    {
+        def.image.url = toNewCdn(def.image.url);
+    }
+
     qCDebug(chatterinoDgg) << "Loaded" << defs.size() << "flairs";
     this->flairs_ = std::move(defs);
     this->rebuildBadges();
@@ -414,7 +472,20 @@ void DggAssets::rebuildBadges()
         }
         qCDebug(chatterinoDgg) << "  flair" << def.name << "->" << def.image.url
                                << def.image.width << "x" << def.image.height;
-        badges.emplace(def.name, makeBadge(def));
+
+        // The stylesheet has no names: take the label and description from
+        // the manifest when it lists the flair.
+        auto named = def;
+        for (const auto &manifest : this->flairs_)
+        {
+            if (manifest.name == def.name)
+            {
+                named.label = manifest.label;
+                named.description = manifest.description;
+                break;
+            }
+        }
+        badges.emplace(def.name, makeBadge(named));
     }
 
     size_t fromManifest = 0;
