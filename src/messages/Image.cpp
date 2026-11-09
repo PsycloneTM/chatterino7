@@ -30,6 +30,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cstring>
 #include <atomic>
 #include <numeric>
 #include <limits>
@@ -41,6 +42,46 @@ const auto IMAGE_POOL_CLEANUP_INTERVAL = std::chrono::minutes(1);
 const auto IMAGE_POOL_IMAGE_LIFETIME = std::chrono::minutes(10);
 
 namespace {
+
+/// APNG files keep the PNG signature and commonly use a `.png` URL. Qt's
+/// regular PNG handler can therefore win format autodetection and return only
+/// the default image. Detect the APNG animation-control chunk (`acTL`) and
+/// explicitly select an installed APNG image plugin when one is available.
+bool hasApngAnimationControlChunk(const QByteArray &data)
+{
+    static constexpr unsigned char PNG_SIGNATURE[] = {
+        0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A,
+    };
+    if (data.size() < 8 ||
+        std::memcmp(data.constData(), PNG_SIGNATURE, sizeof(PNG_SIGNATURE)) != 0)
+    {
+        return false;
+    }
+
+    qsizetype offset = 8;
+    while (offset + 12 <= data.size())
+    {
+        const auto *chunk = reinterpret_cast<const unsigned char *>(
+            data.constData() + offset);
+        const quint32 length = (quint32(chunk[0]) << 24) |
+                               (quint32(chunk[1]) << 16) |
+                               (quint32(chunk[2]) << 8) | quint32(chunk[3]);
+        if (quint64(length) + 12 > quint64(data.size() - offset))
+        {
+            return false;
+        }
+        if (std::memcmp(chunk + 4, "acTL", 4) == 0)
+        {
+            return true;
+        }
+        if (std::memcmp(chunk + 4, "IEND", 4) == 0)
+        {
+            break;
+        }
+        offset += static_cast<qsizetype>(length) + 12;
+    }
+    return false;
+}
 
 /// A sprite animation that plays this often or more is cut off here (the frames
 /// are kept in a list, once per play).
@@ -767,6 +808,25 @@ void Image::actuallyLoad()
         QBuffer buffer;
         buffer.setData(result.getData());
         QImageReader reader(&buffer);
+        const bool isApng = hasApngAnimationControlChunk(buffer.data());
+        if (isApng)
+        {
+            // APNG shares the PNG signature and URL extension. Force the
+            // dedicated plugin so the regular PNG handler cannot flatten it
+            // to its default image. The plugin must be deployed with Qt.
+            const auto formats = QImageReader::supportedImageFormats();
+            if (formats.contains(QByteArrayLiteral("apng")))
+            {
+                reader.setFormat(QByteArrayLiteral("apng"));
+            }
+            else
+            {
+                qCWarning(chatterinoImage)
+                    << "APNG image received but no APNG image plugin is installed;"
+                    << "falling back to PNG still frame:" << shared->url().string;
+                reader.setFormat(QByteArrayLiteral("png"));
+            }
+        }
 
         if (!reader.canRead())
         {
@@ -827,7 +887,7 @@ void Image::actuallyLoad()
                     shared->empty_ = true;
                     return;
                 }
-                assignFrames(shared, std::move(frames));
+                assignFrames(shared, std::move(frames), false);
                 return;
             }
 
@@ -936,7 +996,9 @@ void Image::actuallyLoad()
             reader, shared->url(),
             makeConditionedOptional(needsLimit, limitedSize), Image::maxBytesRam);
 
-        assignFrames(shared, parsed);
+        // Native animated images (GIF/APNG/etc.) loop continuously. CSS
+        // one-shot behavior is applied only to explicitly parsed sprite sheets.
+        assignFrames(shared, parsed, false);
     };
     auto onError = [weak](const auto & /*result*/) {
         auto shared = weak.lock();

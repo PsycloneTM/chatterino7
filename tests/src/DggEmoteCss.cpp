@@ -69,15 +69,20 @@ const char *const FIXTURE_CSS = R"CSS(
     height: 36px;
     width: 44px;
 }
-.emote.VeryPog {
-    background-image: url("6763272555899.png");
+.emote.NativeSquare {
+    background-image: url("native-square.png");
     height: 34px;
     width: 34px;
 }
-.emote.DinkDonk {
-    background-image: url("672493a6f2540.png");
+.emote.NativeWide {
+    background-image: url("native-wide.png");
     height: 30px;
     width: 36px;
+}
+.emote.NativeAnimatedImage {
+    background-image: url("native-animated.png");
+    height: 28px;
+    width: 28px;
 }
 .emote.mhm {
   transform-origin: bottom;
@@ -317,26 +322,31 @@ TEST(DggEmoteCss, MhmKeepsFullGifFrameAndItsCssFilter)
     EXPECT_FALSE(style.isWholeImage(QSize(44, 36)));
 }
 
-TEST(DggEmoteCss, VeryPogAndDinkDonkRemainNativeAnimatedImageAssets)
+TEST(DggEmoteCss, FullImageAssetsRemainOnNativeImagePath)
 {
-    // These two emotes are expected to animate. Their current manifest/CSS
-    // snapshot describes each complete image, not a CSS sprite strip. Keep
-    // them on Image::fromUrl so Chatterino's native image reader can play
-    // multi-frame PNG/APNG assets instead of flattening them through the
-    // sprite-sheet path.
-    const auto veryPog = css().resolve(QStringLiteral("VeryPog"),
-                                       userContext("someone"), QSize(34, 34));
-    ASSERT_TRUE(veryPog.valid);
-    EXPECT_EQ(veryPog.frameSize, QSize(34, 34));
-    EXPECT_TRUE(veryPog.sprite.filters.empty());
-    EXPECT_TRUE(veryPog.isWholeImage(QSize(34, 34)));
+    // Full-image assets are not sprite sheets. Their file decoder determines
+    // whether they contain multiple frames; playback is handled generically by
+    // the native image path, without emote-name or neighboring-emote rules.
+    const auto square = css().resolve(QStringLiteral("NativeSquare"),
+                                      userContext("someone"), QSize(34, 34));
+    ASSERT_TRUE(square.valid);
+    EXPECT_EQ(square.frameSize, QSize(34, 34));
+    EXPECT_TRUE(square.sprite.filters.empty());
+    EXPECT_TRUE(square.isWholeImage(QSize(34, 34)));
 
-    const auto dinkDonk = css().resolve(QStringLiteral("DinkDonk"),
-                                        userContext("someone"), QSize(36, 30));
-    ASSERT_TRUE(dinkDonk.valid);
-    EXPECT_EQ(dinkDonk.frameSize, QSize(36, 30));
-    EXPECT_TRUE(dinkDonk.sprite.filters.empty());
-    EXPECT_TRUE(dinkDonk.isWholeImage(QSize(36, 30)));
+    const auto wide = css().resolve(QStringLiteral("NativeWide"),
+                                    userContext("someone"), QSize(36, 30));
+    ASSERT_TRUE(wide.valid);
+    EXPECT_EQ(wide.frameSize, QSize(36, 30));
+    EXPECT_TRUE(wide.sprite.filters.empty());
+    EXPECT_TRUE(wide.isWholeImage(QSize(36, 30)));
+
+    const auto animated = css().resolve(QStringLiteral("NativeAnimatedImage"),
+                                        userContext("someone"), QSize(28, 28));
+    ASSERT_TRUE(animated.valid);
+    EXPECT_EQ(animated.frameSize, QSize(28, 28));
+    EXPECT_TRUE(animated.sprite.filters.empty());
+    EXPECT_TRUE(animated.isWholeImage(QSize(28, 28)));
 }
 
 TEST(DggEmoteCss, UnknownEmoteHasNoStyle)
