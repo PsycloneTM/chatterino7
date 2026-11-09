@@ -87,6 +87,14 @@ struct SpriteSheetSpec {
     /// `offsets`. Unused if there is only a single frame.
     std::vector<int> durationsMs;
 
+    /// The sheet repeats endlessly in this direction (CSS `background-repeat`,
+    /// which is `repeat` unless the stylesheet says otherwise). A frame that
+    /// reaches beyond the sheet then shows the other end of it instead of
+    /// being transparent. CuckCrab starts its animation 22 frames "before"
+    /// the sheet and SCHEMING ends one sheet width past it; both rely on this.
+    bool tileX = false;
+    bool tileY = false;
+
     /// Applied to every frame, in order.
     std::vector<SpriteColorFilter> filters;
 

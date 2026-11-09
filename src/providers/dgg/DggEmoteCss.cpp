@@ -2586,6 +2586,65 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
         parseFilters(*filter, props, style.sprite.filters, notes);
     }
 
+    // `background-repeat` is `repeat` unless the stylesheet says otherwise
+    // (chat-gui's `.emote` doesn't), so a frame that starts or ends beyond the
+    // sheet shows the sheet's other end instead of nothing.
+    {
+        bool tileX = true;
+        bool tileY = true;
+        std::vector<string> tokens;
+        if (const auto *raw = get("background-repeat"))
+        {
+            if (const auto resolved = resolveVars(*raw, props))
+            {
+                tokens = splitWhitespace(toLower(*resolved));
+            }
+        }
+        else if (const auto *shorthand = get("background"))
+        {
+            if (const auto resolved = resolveVars(*shorthand, props))
+            {
+                for (const auto &token : splitWhitespace(toLower(*resolved)))
+                {
+                    if (token == "no-repeat" || token == "repeat" ||
+                        token == "repeat-x" || token == "repeat-y" ||
+                        token == "space" || token == "round")
+                    {
+                        tokens.push_back(token);
+                    }
+                }
+            }
+        }
+        const auto tiles = [](const string &token, bool horizontal) {
+            if (token == "repeat")
+            {
+                return true;
+            }
+            if (token == "repeat-x")
+            {
+                return horizontal;
+            }
+            if (token == "repeat-y")
+            {
+                return !horizontal;
+            }
+            return false;  // no-repeat, space, round
+        };
+        if (tokens.size() == 1)
+        {
+            tileX = tiles(tokens[0], true);
+            tileY = tiles(tokens[0], false);
+        }
+        else if (tokens.size() >= 2)
+        {
+            // two values: horizontal, then vertical
+            tileX = tokens[0] == "repeat";
+            tileY = tokens[1] == "repeat";
+        }
+        style.sprite.tileX = tileX;
+        style.sprite.tileY = tileY;
+    }
+
     // `background-size: 32px 32px` (or one value for both) shrinks or
     // stretches the whole image, e.g. a 500px GIF drawn at 32px (BlueWave).
     if (const auto *raw = get("background-size"))

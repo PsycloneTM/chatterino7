@@ -141,26 +141,59 @@ Rgba applyFilter(Rgba px, const SpriteColorFilter &filter)
     return px;
 }
 
-/// The `size` area of `source` at `offset`, with whatever lies outside of
-/// the sheet explicitly transparent. (QImage::copy() is documented to fill
-/// that with zeroes, which is only transparent for some formats; frames that
-/// start or end beyond the sheet, like CuckCrab's pause or SCHEMING's final
-/// position, showed up as black.)
-QImage copyFrame(const QImage &source, QPoint offset, QSize size)
+/// Floor division, also for negative numbers.
+int floorDiv(int a, int b)
+{
+    int q = a / b;
+    if ((a % b != 0) && ((a < 0) != (b < 0)))
+    {
+        q--;
+    }
+    return q;
+}
+
+/// The `size` area of `source` at `offset`. What lies outside of the sheet is
+/// explicitly transparent, unless the sheet repeats in that direction: then
+/// it's the other end of the sheet, like a CSS background that is `repeat`ed.
+/// (QImage::copy() fills the outside with zeroes, which is only transparent
+/// for some formats.)
+QImage copyFrame(const QImage &source, QPoint offset, QSize size, bool tileX,
+                 bool tileY)
 {
     QImage out(size, QImage::Format_ARGB32);
     out.fill(Qt::transparent);
-
-    const QRect wanted(offset, size);
-    const QRect inside = wanted.intersected(source.rect());
-    if (inside.isEmpty())
+    if (source.isNull())
     {
         return out;
     }
 
+    const int w = source.width();
+    const int h = source.height();
+    const QRect wanted(offset, size);
+
+    const int firstX = tileX ? floorDiv(wanted.left(), w) : 0;
+    const int lastX = tileX ? floorDiv(wanted.right(), w) : 0;
+    const int firstY = tileY ? floorDiv(wanted.top(), h) : 0;
+    const int lastY = tileY ? floorDiv(wanted.bottom(), h) : 0;
+
     QPainter painter(&out);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
-    painter.drawImage(inside.topLeft() - offset, source, inside);
+    for (int ty = firstY; ty <= lastY; ty++)
+    {
+        for (int tx = firstX; tx <= lastX; tx++)
+        {
+            // where this copy of the sheet lies
+            const QRect tile(tx * w, ty * h, w, h);
+            const QRect inside = wanted.intersected(tile);
+            if (inside.isEmpty())
+            {
+                continue;
+            }
+            // `inside` in the coordinates of the sheet
+            const QRect from = inside.translated(-tile.topLeft());
+            painter.drawImage(inside.topLeft() - offset, source, from);
+        }
+    }
     return out;
 }
 
@@ -203,6 +236,14 @@ QString SpriteSheetSpec::cacheKey() const
         blob.append(';');
     }
     blob.append('|');
+    if (this->tileX || this->tileY)
+    {
+        // only added when set, so the key of a sheet that doesn't repeat is
+        // what it always was
+        blob.append(this->tileX ? "tx" : "");
+        blob.append(this->tileY ? "ty" : "");
+        blob.append('|');
+    }
     for (const auto &filter : this->filters)
     {
         blob.append(QByteArray::number(static_cast<int>(filter.kind)));
@@ -372,7 +413,8 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
     out.reserve(count);
     for (size_t i = 0; i < count; i++)
     {
-        QImage frame = copyFrame(source, spec.offsets[i], spec.frameSize);
+        QImage frame = copyFrame(source, spec.offsets[i], spec.frameSize,
+                                    spec.tileX, spec.tileY);
         if (spec.hasPoses())
         {
             frame = applySpritePose(frame, spec.poses[i]);
@@ -393,7 +435,8 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
 
     if (addRest)
     {
-        QImage rest = copyFrame(source, spec.restOffset, spec.frameSize);
+        QImage rest = copyFrame(source, spec.restOffset, spec.frameSize,
+                                spec.tileX, spec.tileY);
         if (spec.hasPoses())
         {
             rest = applySpritePose(rest, spec.restPose);
