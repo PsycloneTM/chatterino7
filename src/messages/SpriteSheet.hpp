@@ -174,6 +174,35 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
 /// has the size of `frame` and is ARGB32.
 QImage applySpritePose(const QImage &frame, const SpritePose &pose);
 
+/// The frames of an emote that has a natively animated image (an APNG or a
+/// GIF) and CSS that animates `transform`, `opacity`, `filter` or
+/// `clip-path` at the same time (monkaSMEGA: eyes that move + a shake;
+/// RapThis next to GIGACHAD: a loop + a slide in).
+struct PosedNativeFrames {
+    std::vector<SpriteFrame> frames;
+
+    /// Where playback continues after the last frame. -1 means that it
+    /// starts over at the first one. Frames that are equal share their image.
+    int loopFrom = -1;
+};
+
+/// Plays the poses of `spec` (`poses`, `durationsMs`, `loopCount`,
+/// `restPose`) on top of `native`, which loops by itself, the way a browser
+/// runs a CSS animation over an animated image: each of the two keeps its
+/// own clock.
+///
+/// - `loopCount` above 0: the poses play that many times (at most 50), then
+///   `restPose` stays while `native` keeps looping (`loopFrom` is the first
+///   frame of that part).
+/// - `loopCount` 0: both loop forever. The result is one period of the two
+///   together (cut off after 60 s, where it starts over).
+///
+/// Returns nothing if the spec has no poses or `native` is empty. Frames are
+/// ARGB32 and take at least 20 ms.
+PosedNativeFrames composePosedNativeFrames(
+    const std::vector<SpriteFrame> &native, const SpriteSheetSpec &spec,
+    qint64 maxBytes);
+
 /// Applies a filter chain to an image (any format; the result is ARGB32).
 QImage applySpriteFilters(const QImage &image,
                           const std::vector<SpriteColorFilter> &filters);

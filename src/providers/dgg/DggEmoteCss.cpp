@@ -6,6 +6,8 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <optional>
 #include <string_view>
 #include <system_error>
@@ -198,7 +200,7 @@ std::optional<double> parseNumberAt(string_view s, size_t &pos)
     size_t start = pos;
     if (start < s.size() && s[start] == '+')
     {
-        // from_chars doesn't accept a leading plus
+        // skip a leading plus
         start++;
     }
 
@@ -209,18 +211,29 @@ std::optional<double> parseNumberAt(string_view s, size_t &pos)
     }
     if (probe >= s.size() || !(isDigit(s[probe]) || s[probe] == '.'))
     {
-        // also keeps from_chars from reading "inf" and "nan"
+        // also keeps strtod from reading "inf" and "nan"
         return std::nullopt;
     }
 
-    double value = 0;
-    const auto [end, ec] =
-        std::from_chars(s.data() + start, s.data() + s.size(), value);
-    if (ec != std::errc())
+    // std::from_chars() for doubles needs macOS 26 (Chatterino targets 13),
+    // so this uses strtod(). It would also read hex floats, which CSS doesn't
+    // have.
+    {
+        size_t digits = probe;
+        if (digits + 1 < s.size() && s[digits] == '0' &&
+            (s[digits + 1] == 'x' || s[digits + 1] == 'X'))
+        {
+            return std::nullopt;
+        }
+    }
+    const std::string text(s.substr(start, 64));
+    char *endPtr = nullptr;
+    const double value = std::strtod(text.c_str(), &endPtr);
+    if (endPtr == text.c_str() || !std::isfinite(value))
     {
         return std::nullopt;
     }
-    pos = static_cast<size_t>(end - s.data());
+    pos = start + static_cast<size_t>(endPtr - text.c_str());
     return value;
 }
 
@@ -2089,6 +2102,71 @@ SpritePose poseOf(const anim::Computed &state, const anim::Box &box)
     return pose;
 }
 
+/// `filter` with its `drop-shadow()` functions cut out (Sippy has a 0.5px one
+/// on every stop; the baker can't draw them). `none` if nothing is left.
+string withoutDropShadows(string_view filter)
+{
+    string out;
+    size_t i = 0;
+    while (i < filter.size())
+    {
+        if (filter.compare(i, 12, "drop-shadow(") == 0)
+        {
+            int depth = 0;
+            size_t j = i + 11;
+            for (; j < filter.size(); j++)
+            {
+                if (filter[j] == '(')
+                {
+                    depth++;
+                }
+                else if (filter[j] == ')' && --depth == 0)
+                {
+                    break;
+                }
+            }
+            i = j + 1;
+            continue;
+        }
+        out.push_back(filter[i]);
+        i++;
+    }
+    const auto trimmed = string(trimView(out));
+    return trimmed.empty() ? string("none") : trimmed;
+}
+
+/// `background-position: x y` of a keyframe stop as the `translate` of the
+/// image, relative to where the element's own `background-position` puts it
+/// (`basePx`). A background that moves inside its box and a picture that is
+/// shifted inside a box of the same size look the same, since both are cut
+/// off at the box. Used for emotes that slide their picture in (GIGACHAD) or
+/// nudge it (Sippy) with a smooth timing; the sprite code only does `steps()`.
+std::optional<string> backgroundPositionAsTranslate(string_view value,
+                                                    const Props &props,
+                                                    QPoint basePx,
+                                                    QSize frame)
+{
+    const auto tokens = splitWhitespace(value);
+    if (tokens.empty() || tokens.size() > 2)
+    {
+        return std::nullopt;
+    }
+    // a single value is the horizontal one, the vertical one is `center`
+    const auto x = positionPx(tokens[0], props, frame.width(), frame.width());
+    const auto y = tokens.size() == 2
+                       ? positionPx(tokens[1], props, frame.height(),
+                                    frame.height())
+                       : std::optional<double>(0.0);
+    if (!x || !y)
+    {
+        return std::nullopt;
+    }
+    char buffer[96];
+    std::snprintf(buffer, sizeof buffer, "%.4gpx %.4gpx", *x + basePx.x(),
+                  *y + basePx.y());
+    return string(buffer);
+}
+
 /// Animations of `transform`, `opacity`, `filter` and `clip-path` can't run
 /// in Chatterino, so they are baked: the keyframes are evaluated at a series
 /// of moments, and every moment becomes one frame of the emote (a "pose" on
@@ -2097,7 +2175,8 @@ SpritePose poseOf(const anim::Computed &state, const anim::Box &box)
 ///
 /// Leaves `style` alone (adding a note) if the animations can't be baked.
 void bakeAnimations(const Props &props, const Keyframes &keyframes,
-                    DggEmoteStyle &style, std::vector<string> &notes)
+                    DggEmoteStyle &style, QSize sheetSize,
+                    std::vector<string> &notes)
 {
     const auto rawIt = props.find("animation-raw");
     if (rawIt == props.end() || style.sprite.offsets.size() != 1)
@@ -2115,6 +2194,10 @@ void bakeAnimations(const Props &props, const Keyframes &keyframes,
         notes.push_back("animation (not understood): " + *rawList);
         return;
     }
+
+    // `style.sprite.offsets.front()` is the negated `background-position`
+    const QPoint offset = style.sprite.offsets.front();
+    std::vector<string> approximations;
 
     std::vector<anim::Animation> animations;
     for (const auto &spec : *specs)
@@ -2138,8 +2221,34 @@ void bakeAnimations(const Props &props, const Keyframes &keyframes,
             for (const auto &decl : stop.decls)
             {
                 const auto value = resolveVars(decl.value, props);
-                frame.decls.push_back(
-                    anim::KeyframeDecl{decl.name, value ? *value : decl.value});
+                string text = value ? *value : decl.value;
+                string name = decl.name;
+                if (name == "background-position" &&
+                    sheetSize == style.frameSize)
+                {
+                    // (a picture that is the whole image; a frame of a bigger
+                    // sprite sheet can't be moved this way)
+                    // the element's own position is `offset` negated, which
+                    // is where a keyframe without one starts from
+                    if (const auto shifted = backgroundPositionAsTranslate(
+                            text, props, offset, style.frameSize))
+                    {
+                        name = "translate";
+                        text = *shifted;
+                        approximations.push_back(
+                            "animation " + spec.name +
+                            ": background-position played as a shift of the "
+                            "picture");
+                    }
+                }
+                else if (name == "filter" &&
+                         text.find("drop-shadow(") != string::npos)
+                {
+                    text = withoutDropShadows(text);
+                    approximations.push_back("animation " + spec.name +
+                                             ": drop-shadow left out");
+                }
+                frame.decls.push_back(anim::KeyframeDecl{name, text});
             }
             frames.push_back(std::move(frame));
         }
@@ -2207,6 +2316,14 @@ void bakeAnimations(const Props &props, const Keyframes &keyframes,
     std::erase_if(notes, [](const string &note) {
         return note.rfind("animation ", 0) == 0;
     });
+    std::sort(approximations.begin(), approximations.end());
+    approximations.erase(
+        std::unique(approximations.begin(), approximations.end()),
+        approximations.end());
+    for (const auto &note : approximations)
+    {
+        notes.push_back(note);
+    }
     if (baked->truncated)
     {
         notes.emplace_back("animation baking: cut off after 10 s");
@@ -2220,7 +2337,6 @@ void bakeAnimations(const Props &props, const Keyframes &keyframes,
         frames.push_back(frames.front());
     }
 
-    const QPoint offset = style.sprite.offsets.front();
     style.sprite.offsets.assign(frames.size(), offset);
     style.sprite.durationsMs.clear();
     style.sprite.poses.clear();
@@ -2669,7 +2785,7 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
             }
         }
     }
-    bakeAnimations(props, keyframes, style, notes);
+    bakeAnimations(props, keyframes, style, sheetSize, notes);
     applyStaticTransform(props, style, notes);
 
     // A `transform` is only reproduced where an animation moves it or, for a

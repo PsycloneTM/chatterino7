@@ -34,6 +34,7 @@
 #include <cstring>
 #include <atomic>
 #include <numeric>
+#include <unordered_map>
 #include <limits>
 #include <utility>
 
@@ -96,9 +97,10 @@ struct Frames::Storage {
 /// Stores all decoded frames in memory.
 struct Frames::CachedFrames : Storage {
     CachedFrames() = default;
-    CachedFrames(QList<Frame> frames, bool oneShot)
+    CachedFrames(QList<Frame> frames, bool oneShot, qsizetype loopFrom = -1)
         : items(std::move(frames))
         , oneShot(oneShot)
+        , loopFrom(loopFrom)
     {
     }
     ~CachedFrames() override = default;
@@ -141,7 +143,7 @@ struct Frames::CachedFrames : Storage {
             this->advance();
         });
 
-        if (this->oneShot)
+        if (this->oneShot || this->loopFrom >= 0)
         {
             // starts at the first frame, whatever the clock says
             this->index = 0;
@@ -196,6 +198,26 @@ struct Frames::CachedFrames : Storage {
             return;
         }
 
+        if (this->loopFrom >= 0)
+        {
+            // plays through, then loops from `loopFrom` on
+            const auto size = this->items.size();
+            const auto from = std::min(this->loopFrom, size - 1);
+            for (qsizetype guard = 0;
+                 guard < size * 4 + 8 &&
+                 this->durationOffset > this->items.at(this->index).duration;
+                 guard++)
+            {
+                this->durationOffset -= this->items.at(this->index).duration;
+                this->index++;
+                if (this->index >= size)
+                {
+                    this->index = from;
+                }
+            }
+            return;
+        }
+
         while (true)
         {
             this->index %= this->items.size();
@@ -235,6 +257,9 @@ struct Frames::CachedFrames : Storage {
 
     /// Plays once and stays on the last frame
     bool oneShot = false;
+
+    /// If not -1: after the last frame, playback continues here
+    qsizetype loopFrom = -1;
 };
 
 Frames::Frames()
@@ -243,8 +268,9 @@ Frames::Frames()
     DebugCount::increase(DebugObject::Image);
 }
 
-Frames::Frames(QList<Frame> &&frames, bool oneShot)
-    : storage_(std::make_unique<CachedFrames>(std::move(frames), oneShot))
+Frames::Frames(QList<Frame> &&frames, bool oneShot, qsizetype loopFrom)
+    : storage_(
+          std::make_unique<CachedFrames>(std::move(frames), oneShot, loopFrom))
 {
     assertInGuiThread();
     auto *app = tryGetApp();
@@ -401,19 +427,20 @@ QList<Frame> readFrames(QImageReader &reader, const Url &url,
     return frames;
 }
 
-void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed, bool oneShot)
+void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed, bool oneShot,
+                  qsizetype loopFrom)
 {
     static bool isPushQueued;
 
-    auto cb = [parsed = std::move(parsed), weak = std::move(weak),
-               oneShot]() mutable {
+    auto cb = [parsed = std::move(parsed), weak = std::move(weak), oneShot,
+               loopFrom]() mutable {
         auto shared = weak.lock();
         if (!shared)
         {
             return;
         }
-        shared->frames_ =
-            std::make_unique<detail::Frames>(std::move(parsed), oneShot);
+        shared->frames_ = std::make_unique<detail::Frames>(std::move(parsed),
+                                                           oneShot, loopFrom);
         if (shared->autoScale_)
         {
             // FIXME: We should actually scale the pixmaps. However, we'd also
@@ -848,6 +875,78 @@ void Image::actuallyLoad()
             // origin covering the entire image (mhm is the current example).
             // Keep every native animation frame and apply the filters to each
             // one; reading only the first frame here would silently freeze it.
+            // An emote whose image is animated by itself (an APNG or GIF) and
+            // whose CSS animates transform, opacity, filter or clip-path as
+            // well (monkaSMEGA, RapThis next to GIGACHAD): the poses play on
+            // top of the image's own frames, each with its own clock, as in a
+            // browser. Slicing the first frame as a sprite sheet would throw
+            // the image's animation away.
+            const bool nativePosed =
+                supportsAnimation && spec.hasPoses() &&
+                (apng || reportedFrameCount > 1) && spec.frameSize == size &&
+                std::all_of(spec.offsets.begin(), spec.offsets.end(),
+                            [](const QPoint &p) {
+                                return p == QPoint(0, 0);
+                            });
+            if (nativePosed)
+            {
+                auto native =
+                    apng ? apngFrames(std::nullopt)
+                         : detail::readFrames(reader, shared->url(),
+                                              std::nullopt, Image::maxBytesRam);
+                if (native.empty())
+                {
+                    shared->empty_ = true;
+                    return;
+                }
+                std::vector<SpriteFrame> source;
+                source.reserve(static_cast<size_t>(native.size()));
+                for (const auto &frame : native)
+                {
+                    source.push_back(SpriteFrame{
+                        .image = frame.image.toImage(),
+                        .durationMs = static_cast<int>(frame.duration),
+                    });
+                }
+                auto composed = composePosedNativeFrames(source, spec,
+                                                         Image::maxBytesRam);
+                if (composed.frames.empty())
+                {
+                    shared->empty_ = true;
+                    return;
+                }
+
+                // equal frames share one pixmap
+                std::unordered_map<qint64, QPixmap> pixmaps;
+                QList<detail::Frame> frames;
+                frames.reserve(static_cast<qsizetype>(composed.frames.size()));
+                for (auto &frame : composed.frames)
+                {
+                    const auto key = frame.image.cacheKey();
+                    auto it = pixmaps.find(key);
+                    if (it == pixmaps.end())
+                    {
+                        it = pixmaps
+                                 .emplace(key,
+                                          QPixmap::fromImage(
+                                              std::move(frame.image)))
+                                 .first;
+                    }
+                    frames.append(detail::Frame{
+                        .image = it->second,
+                        .duration = frame.durationMs,
+                    });
+                }
+                qCDebug(chatterinoImage)
+                    << "Animated image with poses" << shared->url().string
+                    << "->" << native.size() << "native frames,"
+                    << frames.size() << "frames in all, loops from"
+                    << composed.loopFrom;
+                assignFrames(shared, std::move(frames), false,
+                             composed.loopFrom);
+                return;
+            }
+
             const bool fullImageFrame =
                 !spec.hasPoses() && spec.offsets.size() == 1 &&
                 spec.offsets.front() == QPoint(0, 0) && spec.frameSize == size;

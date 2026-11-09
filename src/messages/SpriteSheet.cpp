@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
+#include <numeric>
 
 namespace {
 
@@ -448,6 +450,148 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
         out.push_back(SpriteFrame{.image = std::move(rest), .durationMs = 0});
     }
 
+    return out;
+}
+
+PosedNativeFrames composePosedNativeFrames(
+    const std::vector<SpriteFrame> &native, const SpriteSheetSpec &spec,
+    qint64 maxBytes)
+{
+    PosedNativeFrames out;
+    if (native.empty() || !spec.hasPoses() ||
+        spec.poses.size() != spec.durationsMs.size())
+    {
+        return out;
+    }
+
+    constexpr qint64 MAX_PHASE_MS = 60000;
+    constexpr int MAX_POSE_PLAYS = 50;
+    constexpr size_t MAX_COMPOSED_FRAMES = 1500;
+
+    const size_t poseCount = spec.poses.size();
+    const size_t nativeCount = native.size();
+
+    std::vector<QImage> sources;
+    sources.reserve(nativeCount);
+    for (const auto &frame : native)
+    {
+        sources.push_back(frame.image.convertToFormat(QImage::Format_ARGB32));
+    }
+
+    const auto nativeDuration = [&](size_t i) -> qint64 {
+        const int d = native[i].durationMs > 0 ? native[i].durationMs : 100;
+        return std::max(MIN_FRAME_DURATION_MS, d);
+    };
+    const auto poseDuration = [&](size_t i) -> qint64 {
+        return std::max(MIN_FRAME_DURATION_MS, spec.durationsMs[i]);
+    };
+
+    qint64 poseTotal = 0;
+    for (size_t i = 0; i < poseCount; i++)
+    {
+        poseTotal += poseDuration(i);
+    }
+    qint64 nativeTotal = 0;
+    for (size_t i = 0; i < nativeCount; i++)
+    {
+        nativeTotal += nativeDuration(i);
+    }
+
+    const qint64 frameBytes =
+        std::max<qint64>(1, static_cast<qint64>(sources.front().width()) *
+                                sources.front().height() * 4);
+    const size_t maxFrames = static_cast<size_t>(std::clamp<qint64>(
+        maxBytes / frameBytes / 2, static_cast<qint64>(nativeCount) + 2,
+        static_cast<qint64>(MAX_COMPOSED_FRAMES)));
+
+    // (native frame, pose) -> image; the pose index `poseCount` is the rest
+    // pose
+    std::map<std::pair<size_t, size_t>, QImage> cache;
+    const auto render = [&](size_t ni, size_t pi) -> QImage {
+        const auto key = std::make_pair(ni, pi);
+        if (const auto it = cache.find(key); it != cache.end())
+        {
+            return it->second;
+        }
+        const auto &pose = pi == poseCount ? spec.restPose : spec.poses[pi];
+        auto image = applySpritePose(sources[ni], pose);
+        cache.emplace(key, image);
+        return image;
+    };
+
+    std::vector<std::pair<size_t, size_t>> keys;
+    const auto push = [&](size_t ni, size_t pi, qint64 duration) {
+        const auto key = std::make_pair(ni, pi);
+        const bool tooShort = duration < MIN_FRAME_DURATION_MS;
+        if (!out.frames.empty() && (keys.back() == key || tooShort))
+        {
+            // the same moment again, or too short to be seen: the frame
+            // before it takes the time
+            out.frames.back().durationMs += static_cast<int>(duration);
+            return;
+        }
+        keys.push_back(key);
+        out.frames.push_back(SpriteFrame{
+            .image = render(ni, pi),
+            .durationMs = static_cast<int>(duration),
+        });
+    };
+
+    const bool endless = spec.loopCount <= 0;
+    qint64 phaseLength = 0;
+    if (endless)
+    {
+        phaseLength = std::min<qint64>(std::lcm(poseTotal, nativeTotal),
+                                       MAX_PHASE_MS);
+    }
+    else
+    {
+        phaseLength = std::min<qint64>(
+            poseTotal * std::min(spec.loopCount, MAX_POSE_PLAYS),
+            MAX_PHASE_MS * 2);
+    }
+
+    size_t pi = 0;
+    size_t ni = 0;
+    qint64 poseLeft = poseDuration(0);
+    qint64 nativeLeft = nativeDuration(0);
+    qint64 t = 0;
+    while (t < phaseLength && out.frames.size() < maxFrames)
+    {
+        const qint64 step =
+            std::min({poseLeft, nativeLeft, phaseLength - t});
+        push(ni, pi, step);
+        t += step;
+        poseLeft -= step;
+        nativeLeft -= step;
+        if (poseLeft == 0)
+        {
+            pi = (pi + 1) % poseCount;
+            poseLeft = poseDuration(pi);
+        }
+        if (nativeLeft == 0)
+        {
+            ni = (ni + 1) % nativeCount;
+            nativeLeft = nativeDuration(ni);
+        }
+    }
+
+    if (endless)
+    {
+        out.loopFrom = 0;
+        return out;
+    }
+
+    // the poses are done: the rest pose, and the image keeps looping
+    out.loopFrom = static_cast<int>(out.frames.size());
+    for (size_t i = 0; i < nativeCount; i++)
+    {
+        keys.emplace_back(i, poseCount);
+        out.frames.push_back(SpriteFrame{
+            .image = render(i, poseCount),
+            .durationMs = static_cast<int>(nativeDuration(i)),
+        });
+    }
     return out;
 }
 

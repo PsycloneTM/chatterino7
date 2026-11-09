@@ -40,7 +40,11 @@ public:
     Frames();
     /// With `oneShot`, the frames play once (from the first one, as soon as
     /// they are loaded) and the last one stays.
-    Frames(QList<Frame> &&frames, bool oneShot = false);
+    /// With `loopFrom` (not -1), the frames play from the first one, as soon
+    /// as they are loaded, and after the last one playback continues at
+    /// frame `loopFrom` for good.
+    Frames(QList<Frame> &&frames, bool oneShot = false,
+           qsizetype loopFrom = -1);
     ~Frames();
 
     Frames(const Frames &) = delete;
@@ -67,7 +71,7 @@ private:
 QList<Frame> readFrames(QImageReader &reader, const Url &url,
                         std::optional<QSize> rescale = std::nullopt);
 void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed,
-                  bool oneShot = false);
+                  bool oneShot = false, qsizetype loopFrom = -1);
 
 }  // namespace chatterino::detail
 
@@ -165,7 +169,7 @@ private:
 
     friend class ImageExpirationPool;
     friend void detail::assignFrames(std::weak_ptr<Image>,
-                                     QList<detail::Frame>, bool);
+                                     QList<detail::Frame>, bool, qsizetype);
 };
 
 // forward-declarable function that calls Image::getEmpty() under the hood.
