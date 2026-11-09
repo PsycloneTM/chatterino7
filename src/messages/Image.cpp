@@ -853,7 +853,7 @@ void Image::actuallyLoad()
                 return;
             }
 
-            const auto &spec = *shared->sprite_;
+            // Reuse the sprite spec declared above in this lambda.
             const auto toFrame = [](SpriteFrame &frame) {
                 return detail::Frame{
                     .image = QPixmap::fromImage(std::move(frame.image)),
