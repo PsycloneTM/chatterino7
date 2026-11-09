@@ -64,6 +64,11 @@ struct DggFlairDef {
 
     DggImageRef image;
 
+    /// The CSS `order` of the badge (only filled in from `flairs.css`).
+    /// chat-gui draws the badges in a flex row, so lower numbers come first;
+    /// flairs without a value have 0.
+    int order = 0;
+
     bool colorsNick() const
     {
         return this->rainbowColor || !this->color.isEmpty();
@@ -77,6 +82,16 @@ std::vector<DggEmoteDef> parseDggEmotes(const QJsonArray &json);
 /// Parses the flair manifest. Entries without a `name` are skipped. The order
 /// of the manifest is kept.
 std::vector<DggFlairDef> parseDggFlairs(const QJsonArray &json);
+
+/// Reads the badge images out of `flairs.css`: every `.flair.<name>` rule that
+/// has a `background-image` gives one entry (`name` and `label` are the class
+/// name, the size comes from `width`/`height`). `baseUrl` is where the
+/// stylesheet was loaded from; relative image URLs are resolved against it,
+/// like a browser does. Rules that hide the flair (`display: none`) or have no
+/// image and no `order` are skipped. For a name that has several rules, the last value of
+/// each property wins. The order of first appearance is kept.
+std::vector<DggFlairDef> parseDggFlairCss(const QString &css,
+                                          const QString &baseUrl);
 
 /// chat-gui's `EmoteService.emotesForUser`: privileged users may use every
 /// emote, everyone else needs Patreon (for Patreon-only emotes) or a high

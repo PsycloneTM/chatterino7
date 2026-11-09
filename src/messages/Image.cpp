@@ -41,6 +41,10 @@ const auto IMAGE_POOL_IMAGE_LIFETIME = std::chrono::minutes(10);
 
 namespace {
 
+/// A sprite animation that plays this often or more is cut off here (the frames
+/// are kept in a list, once per play).
+constexpr int MAX_SPRITE_PLAYS = 50;
+
 using namespace chatterino;
 
 std::pair<QSize, bool> limitedAutoScaleSize(
@@ -89,8 +93,9 @@ struct Frames::Storage {
 /// Stores all decoded frames in memory.
 struct Frames::CachedFrames : Storage {
     CachedFrames() = default;
-    explicit CachedFrames(QList<Frame> frames)
+    CachedFrames(QList<Frame> frames, bool oneShot)
         : items(std::move(frames))
+        , oneShot(oneShot)
     {
     }
     ~CachedFrames() override = default;
@@ -133,6 +138,14 @@ struct Frames::CachedFrames : Storage {
             this->advance();
         });
 
+        if (this->oneShot)
+        {
+            // starts at the first frame, whatever the clock says
+            this->index = 0;
+            this->durationOffset = 0;
+            return;
+        }
+
         const auto totalLength =
             std::accumulate(this->items.begin(), this->items.end(), 0UL,
                             [](auto init, auto &&frame) {
@@ -160,6 +173,23 @@ struct Frames::CachedFrames : Storage {
     {
         if (this->items.isEmpty())
         {
+            return;
+        }
+
+        if (this->oneShot)
+        {
+            // never wraps: the last frame stays
+            while (this->index + 1 < this->items.size() &&
+                   this->durationOffset > this->items.at(this->index).duration)
+            {
+                this->durationOffset -= this->items.at(this->index).duration;
+                this->index++;
+            }
+            if (this->index + 1 >= this->items.size())
+            {
+                // resting; keeps the offset from growing for ever
+                this->durationOffset = 0;
+            }
             return;
         }
 
@@ -199,16 +229,19 @@ struct Frames::CachedFrames : Storage {
     QList<Frame> items;
     QList<Frame>::size_type index{0};
     int durationOffset{0};
+
+    /// Plays once and stays on the last frame
+    bool oneShot = false;
 };
 
 Frames::Frames()
-    : storage_(std::make_unique<CachedFrames>())
+    : storage_(std::make_unique<CachedFrames>(QList<Frame>{}, false))
 {
     DebugCount::increase(DebugObject::Image);
 }
 
-Frames::Frames(QList<Frame> &&frames)
-    : storage_(std::make_unique<CachedFrames>(std::move(frames)))
+Frames::Frames(QList<Frame> &&frames, bool oneShot)
+    : storage_(std::make_unique<CachedFrames>(std::move(frames), oneShot))
 {
     assertInGuiThread();
     auto *app = tryGetApp();
@@ -268,7 +301,7 @@ void Frames::clear()
     DebugCount::decrease(DebugObject::BytesImageCurrent, this->memoryUsage());
     DebugCount::increase(DebugObject::BytesImageUnloaded, this->memoryUsage());
 
-    this->storage_ = std::make_unique<CachedFrames>();
+    this->storage_ = std::make_unique<CachedFrames>(QList<Frame>{}, false);
 }
 
 bool Frames::empty() const
@@ -338,17 +371,19 @@ QList<Frame> readFrames(QImageReader &reader, const Url &url,
     return frames;
 }
 
-void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed)
+void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed, bool oneShot)
 {
     static bool isPushQueued;
 
-    auto cb = [parsed = std::move(parsed), weak = std::move(weak)]() mutable {
+    auto cb = [parsed = std::move(parsed), weak = std::move(weak),
+               oneShot]() mutable {
         auto shared = weak.lock();
         if (!shared)
         {
             return;
         }
-        shared->frames_ = std::make_unique<detail::Frames>(std::move(parsed));
+        shared->frames_ =
+            std::make_unique<detail::Frames>(std::move(parsed), oneShot);
         if (shared->autoScale_)
         {
             // FIXME: We should actually scale the pixmaps. However, we'd also
@@ -753,17 +788,60 @@ void Image::actuallyLoad()
                 return;
             }
 
-            QList<detail::Frame> frames;
-            frames.reserve(static_cast<qsizetype>(sliced.size()));
-            for (auto &frame : sliced)
-            {
-                frames.append(detail::Frame{
+            const auto &spec = *shared->sprite_;
+            const auto toFrame = [](SpriteFrame &frame) {
+                return detail::Frame{
                     .image = QPixmap::fromImage(std::move(frame.image)),
                     .duration = frame.durationMs > 0 ? frame.durationMs : 100,
-                });
+                };
+            };
+
+            // One more frame than there are offsets: the one a limited
+            // animation rests on
+            const bool oneShot =
+                spec.playsOnce() && sliced.size() == spec.offsets.size() + 1;
+
+            QList<detail::Frame> frames;
+            if (oneShot)
+            {
+                // The pixmaps are shared, so playing the frames several
+                // times costs a few pointers
+                const int plays = std::min(spec.loopCount, MAX_SPRITE_PLAYS);
+                const auto cycle = sliced.size() - 1;
+                std::vector<detail::Frame> once;
+                once.reserve(cycle);
+                for (size_t i = 0; i < cycle; i++)
+                {
+                    once.push_back(toFrame(sliced[i]));
+                }
+                frames.reserve(static_cast<qsizetype>(cycle * static_cast<size_t>(plays) + 1));
+                for (int play = 0; play < plays; play++)
+                {
+                    for (const auto &frame : once)
+                    {
+                        frames.append(frame);
+                    }
+                }
+                auto rest = toFrame(sliced.back());
+                // never left again
+                rest.duration = 1000;
+                frames.append(std::move(rest));
+            }
+            else
+            {
+                frames.reserve(static_cast<qsizetype>(sliced.size()));
+                for (auto &frame : sliced)
+                {
+                    frames.append(toFrame(frame));
+                }
             }
 
-            assignFrames(shared, std::move(frames));
+            qCDebug(chatterinoImage)
+                << "Sprite sheet" << shared->url().string << "->"
+                << sliced.size() << "frames, played"
+                << (oneShot ? "a limited number of times" : "forever");
+
+            assignFrames(shared, std::move(frames), oneShot);
             return;
         }
 

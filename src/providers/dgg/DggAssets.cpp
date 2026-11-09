@@ -12,6 +12,9 @@
 #include <QSize>
 #include <QUrl>
 
+#include <algorithm>
+#include <utility>
+
 namespace {
 
 using namespace chatterino;
@@ -22,6 +25,9 @@ constexpr auto FLAIRS_URL = "https://cdn.destiny.gg/flairs/flairs.json"_L1;
 
 /// chat-gui loads it from the same place as the manifest.
 constexpr auto EMOTES_CSS_URL = "https://cdn.destiny.gg/emotes/emotes.css"_L1;
+
+/// The manifest doesn't list every flair that has an image here.
+constexpr auto FLAIRS_CSS_URL = "https://cdn.destiny.gg/flairs/flairs.css"_L1;
 
 constexpr int REQUEST_TIMEOUT_MS = 15000;
 
@@ -111,7 +117,7 @@ void DggAssets::load()
         return;
     }
     this->loading_ = true;
-    this->pending_ = 3;
+    this->pending_ = 4;
 
     this->fetch(EMOTES_URL, [this](const QJsonArray &json) {
         this->applyEmotes(json);
@@ -121,6 +127,9 @@ void DggAssets::load()
     });
     this->fetchText(EMOTES_CSS_URL, [this](const QString &css) {
         this->applyCss(css);
+    });
+    this->fetchText(FLAIRS_CSS_URL, [this](const QString &css) {
+        this->applyFlairCss(css);
     });
 }
 
@@ -275,7 +284,14 @@ void DggAssets::rebuildEmotes()
             entry.contextual = this->css_.dependsOnContext(entry.def.prefix);
         }
         entry.emote = makeEmote(entry.def, style);
+        entry.style = std::move(style);
     }
+}
+
+DggEmoteStyle DggAssets::withOwnPlay(DggEmoteStyle style) const
+{
+    style.sprite.instanceId = ++this->nextPlayId_;
+    return style;
 }
 
 void DggAssets::applyFlairs(const QJsonArray &json)
@@ -287,8 +303,31 @@ void DggAssets::applyFlairs(const QJsonArray &json)
         return;
     }
 
+    qCDebug(chatterinoDgg) << "Loaded" << defs.size() << "flairs";
+    this->flairs_ = std::move(defs);
+    this->rebuildBadges();
+}
+
+void DggAssets::applyFlairCss(const QString &css)
+{
+    auto defs = parseDggFlairCss(css, FLAIRS_CSS_URL);
+    if (defs.empty())
+    {
+        // Keep what we had, like for the manifests.
+        qCWarning(chatterinoDgg) << "The flair stylesheet has no flair images";
+        return;
+    }
+
+    qCDebug(chatterinoDgg) << "Loaded" << defs.size()
+                           << "flair images from the stylesheet";
+    this->cssFlairs_ = std::move(defs);
+    this->rebuildBadges();
+}
+
+void DggAssets::rebuildBadges()
+{
     StringMap<EmotePtr> badges;
-    for (const auto &def : defs)
+    for (const auto &def : this->flairs_)
     {
         if (def.image.isValid())
         {
@@ -296,9 +335,30 @@ void DggAssets::applyFlairs(const QJsonArray &json)
         }
     }
 
-    qCDebug(chatterinoDgg) << "Loaded" << defs.size() << "flairs";
-    this->flairs_ = std::move(defs);
+    // The manifest wins. The stylesheet fills in the flairs it has no image
+    // for or doesn't list at all (chat-gui doesn't draw those, we do).
+    size_t extra = 0;
+    StringMap<int> orders;
+    for (const auto &def : this->cssFlairs_)
+    {
+        orders.emplace(def.name, def.order);
+        if (!def.image.isValid())
+        {
+            continue;
+        }
+        if (badges.emplace(def.name, makeBadge(def)).second)
+        {
+            extra++;
+        }
+    }
+    if (extra > 0)
+    {
+        qCDebug(chatterinoDgg)
+            << extra << "flair badges come from the stylesheet only";
+    }
+
     this->badges_ = std::move(badges);
+    this->badgeOrder_ = std::move(orders);
 }
 
 EmotePtr DggAssets::emoteFor(QStringView word, const DggUser &user) const
@@ -323,11 +383,19 @@ EmotePtr DggAssets::emoteFor(QStringView word, const DggUser &user,
     }
     if (!entry.contextual)
     {
+        if (entry.style.valid && entry.style.sprite.playsOnce())
+        {
+            return makeEmote(entry.def, this->withOwnPlay(entry.style));
+        }
         return entry.emote;
     }
 
     const auto style = this->css_.resolve(entry.def.prefix, context,
                                           sheetSizeOf(entry.def.image));
+    if (style.valid && style.sprite.playsOnce())
+    {
+        return makeEmote(entry.def, this->withOwnPlay(style));
+    }
     const QString key = entry.def.prefix + QChar(u'|') + style.cacheKey();
     if (auto cached = this->styled_.find(key); cached != this->styled_.end())
     {
@@ -364,14 +432,34 @@ DggEmoteContext DggAssets::emoteContextFor(const DggUser &user, bool isAction,
 
 std::vector<EmotePtr> DggAssets::badgesFor(const DggUser &user) const
 {
-    std::vector<EmotePtr> out;
+    std::vector<std::pair<int, EmotePtr>> found;
     for (const auto &feature : user.features)
     {
         auto it = this->badges_.find(feature);
-        if (it != this->badges_.end())
+        if (it == this->badges_.end())
         {
-            out.push_back(it->second);
+            continue;
         }
+        int order = 0;
+        if (auto o = this->badgeOrder_.find(feature);
+            o != this->badgeOrder_.end())
+        {
+            order = o->second;
+        }
+        found.emplace_back(order, it->second);
+    }
+
+    // Stable, so equal orders keep the order of the features
+    std::stable_sort(found.begin(), found.end(),
+                     [](const auto &a, const auto &b) {
+                         return a.first < b.first;
+                     });
+
+    std::vector<EmotePtr> out;
+    out.reserve(found.size());
+    for (auto &entry : found)
+    {
+        out.push_back(std::move(entry.second));
     }
     return out;
 }

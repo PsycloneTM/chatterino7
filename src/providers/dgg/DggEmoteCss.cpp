@@ -1549,6 +1549,9 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
     // The sprite animation, if any
     std::vector<double> xs;
     std::vector<int> durations;
+    // where the last keyframe leaves the background (`animation-fill-mode:
+    // forwards` keeps it there)
+    double endX = x0;
 
     const auto *nameValue = get("animation-name");
     if (nameValue != nullptr && *nameValue != "none")
@@ -1620,9 +1623,11 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
                 }
 
                 const auto *direction = get("animation-direction");
+                endX = b;
                 if (direction != nullptr && *direction == "reverse")
                 {
                     std::reverse(xs.begin(), xs.end());
+                    endX = a;
                 }
                 else if (direction != nullptr && *direction != "normal")
                 {
@@ -1658,6 +1663,61 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
                                           static_cast<int>(std::lround(-y0)));
     }
     style.sprite.durationsMs = std::move(durations);
+
+    // How often it plays, and what it shows afterwards. The CSS default is
+    // one play; `infinite` is the only way to loop.
+    if (style.sprite.offsets.size() > 1)
+    {
+        const auto first = [&](const char *name) -> std::optional<string> {
+            const auto *raw = get(name);
+            if (raw == nullptr)
+            {
+                return std::nullopt;
+            }
+            const auto resolved = resolveVars(*raw, props);
+            if (!resolved)
+            {
+                return std::nullopt;
+            }
+            const auto parts = splitTopLevel(*resolved, ',');
+            if (parts.empty())
+            {
+                return std::nullopt;
+            }
+            return toLower(trimView(parts.front()));
+        };
+
+        int loops = 1;
+        if (const auto count = first("animation-iteration-count"))
+        {
+            if (*count == "infinite")
+            {
+                loops = 0;
+            }
+            else if (const auto n = parseNumber(*count); n && *n > 0)
+            {
+                // a part of a play (2.5) is rounded up
+                loops = static_cast<int>(std::min(std::ceil(*n), 1e6));
+            }
+        }
+
+        if (loops > 0)
+        {
+            const auto fill = first("animation-fill-mode");
+            const bool keepEnd = fill && (*fill == "forwards" || *fill == "both");
+            const double restX = keepEnd ? endX : x0;
+
+            style.sprite.loopCount = loops;
+            style.sprite.restOffset =
+                QPoint(static_cast<int>(std::lround(-restX)),
+                       static_cast<int>(std::lround(-y0)));
+        }
+        if (const auto delay = first("animation-delay");
+            delay && *delay != "0s" && *delay != "0ms" && *delay != "0")
+        {
+            notes.emplace_back("animation-delay " + *delay);
+        }
+    }
 
     if (const auto *filter = get("filter"))
     {

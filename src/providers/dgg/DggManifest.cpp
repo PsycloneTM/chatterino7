@@ -3,6 +3,8 @@
 #include "providers/dgg/DggMessage.hpp"
 
 #include <QJsonObject>
+#include <QRegularExpression>
+#include <QUrl>
 
 #include <algorithm>
 
@@ -83,6 +85,98 @@ std::vector<DggFlairDef> parseDggFlairs(const QJsonArray &json)
     }
 
     return out;
+}
+
+std::vector<DggFlairDef> parseDggFlairCss(const QString &css,
+                                          const QString &baseUrl)
+{
+    static const QRegularExpression comments(
+        QStringLiteral(R"(/\*.*?\*/)"),
+        QRegularExpression::DotMatchesEverythingOption);
+    // Only plain `.flair.<name> { ... }` rules. `.user.<name>` and the like
+    // don't match because of the `.flair.` part.
+    static const QRegularExpression rule(
+        QStringLiteral(R"((?<![A-Za-z0-9_-])\.flair\.([A-Za-z0-9_-]+)\s*\{([^}]*)\})"),
+        QRegularExpression::MultilineOption);
+    static const QRegularExpression image(
+        QStringLiteral(
+            R"(background-image\s*:\s*url\(\s*["']?([^"')]+?)["']?\s*\))"));
+    static const QRegularExpression width(
+        QStringLiteral(R"((?:^|[;\s])width\s*:\s*(\d+)px)"));
+    static const QRegularExpression height(
+        QStringLiteral(R"((?:^|[;\s])height\s*:\s*(\d+)px)"));
+    static const QRegularExpression order(
+        QStringLiteral(R"((?:^|[;\s])order\s*:\s*(-?\d+))"));
+    static const QRegularExpression hidden(
+        QStringLiteral(R"(display\s*:\s*none)"));
+
+    const QUrl base(baseUrl);
+    const QString clean = QString(css).remove(comments);
+
+    std::vector<DggFlairDef> out;
+    std::vector<bool> isHidden;
+    std::vector<bool> hasOrder;
+
+    auto it = rule.globalMatch(clean);
+    while (it.hasNext())
+    {
+        const auto match = it.next();
+        const QString name = match.captured(1);
+        const QString body = match.captured(2);
+
+        size_t index = out.size();
+        for (size_t i = 0; i < out.size(); i++)
+        {
+            if (out[i].name == name)
+            {
+                index = i;
+                break;
+            }
+        }
+        if (index == out.size())
+        {
+            DggFlairDef def;
+            def.name = name;
+            def.label = name;
+            out.push_back(std::move(def));
+            isHidden.push_back(false);
+            hasOrder.push_back(false);
+        }
+
+        auto &def = out[index];
+        if (body.contains(hidden))
+        {
+            isHidden[index] = true;
+        }
+        if (auto m = image.match(body); m.hasMatch())
+        {
+            def.image.url = base.resolved(QUrl(m.captured(1).trimmed()))
+                                .toString();
+        }
+        if (auto m = order.match(body); m.hasMatch())
+        {
+            def.order = m.captured(1).toInt();
+            hasOrder[index] = true;
+        }
+        if (auto m = width.match(body); m.hasMatch())
+        {
+            def.image.width = m.captured(1).toInt();
+        }
+        if (auto m = height.match(body); m.hasMatch())
+        {
+            def.image.height = m.captured(1).toInt();
+        }
+    }
+
+    std::vector<DggFlairDef> filtered;
+    for (size_t i = 0; i < out.size(); i++)
+    {
+        if (!isHidden[i] && (out[i].image.isValid() || hasOrder[i]))
+        {
+            filtered.push_back(std::move(out[i]));
+        }
+    }
+    return filtered;
 }
 
 bool dggCanUseEmote(const DggEmoteDef &emote, const DggUser &user)

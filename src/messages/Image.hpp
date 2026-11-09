@@ -38,7 +38,9 @@ class Frames
 {
 public:
     Frames();
-    Frames(QList<Frame> &&frames);
+    /// With `oneShot`, the frames play once (from the first one, as soon as
+    /// they are loaded) and the last one stays.
+    Frames(QList<Frame> &&frames, bool oneShot = false);
     ~Frames();
 
     Frames(const Frames &) = delete;
@@ -64,7 +66,8 @@ private:
 
 QList<Frame> readFrames(QImageReader &reader, const Url &url,
                         std::optional<QSize> rescale = std::nullopt);
-void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed);
+void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed,
+                  bool oneShot = false);
 
 }  // namespace chatterino::detail
 
@@ -160,7 +163,7 @@ private:
 
     friend class ImageExpirationPool;
     friend void detail::assignFrames(std::weak_ptr<Image>,
-                                     QList<detail::Frame>);
+                                     QList<detail::Frame>, bool);
 };
 
 // forward-declarable function that calls Image::getEmpty() under the hood.

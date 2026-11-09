@@ -177,6 +177,20 @@ QString SpriteSheetSpec::cacheKey() const
         blob.append(';');
     }
 
+    // Only added when set, so the key of an ordinary (looping) animation
+    // is what it always was
+    if (this->loopCount > 0 || this->instanceId != 0)
+    {
+        blob.append('|');
+        blob.append(QByteArray::number(this->loopCount));
+        blob.append(',');
+        blob.append(QByteArray::number(this->restOffset.x()));
+        blob.append(',');
+        blob.append(QByteArray::number(this->restOffset.y()));
+        blob.append(',');
+        blob.append(QByteArray::number(this->instanceId));
+    }
+
     return QString::fromLatin1(
         QCryptographicHash::hash(blob, QCryptographicHash::Sha1).toHex());
 }
@@ -230,9 +244,11 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
     size_t count = spec.offsets.size();
     const qint64 frameBytes = static_cast<qint64>(spec.frameSize.width()) *
                               spec.frameSize.height() * 4;
-    if (frameBytes * static_cast<qint64>(count) > maxBytes)
+    bool addRest = spec.playsOnce();
+    if (frameBytes * static_cast<qint64>(count + (addRest ? 1 : 0)) > maxBytes)
     {
         count = 1;
+        addRest = false;
     }
 
     out.reserve(count);
@@ -251,6 +267,16 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
             .image = std::move(frame),
             .durationMs = duration,
         });
+    }
+
+    if (addRest)
+    {
+        QImage rest = source.copy(QRect(spec.restOffset, spec.frameSize));
+        if (!spec.filters.empty())
+        {
+            rest = applySpriteFilters(rest, spec.filters);
+        }
+        out.push_back(SpriteFrame{.image = std::move(rest), .durationMs = 0});
     }
 
     return out;

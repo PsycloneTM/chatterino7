@@ -191,3 +191,47 @@ TEST(SpriteSheet, TheCacheKeyTellsSpecsApart)
     EXPECT_TRUE(a.cacheKey() != filtered.cacheKey());
     EXPECT_FALSE(a == filtered);
 }
+
+TEST(SpriteSheet, ALimitedAnimationEndsWithItsRestFrame)
+{
+    const QSize frame(2, 2);
+    const auto sheet = makeSheet(4, frame);
+
+    auto spec = specFor(frame, {QPoint(0, 0), QPoint(2, 0), QPoint(4, 0)});
+    spec.loopCount = 2;
+    spec.restOffset = QPoint(6, 0);
+    ASSERT_TRUE(spec.playsOnce());
+
+    const auto frames = sliceSpriteSheet(sheet, spec, PLENTY);
+    // the three frames of one play, then the frame it rests on
+    ASSERT_EQ(frames.size(), 4U);
+    EXPECT_EQ(qRed(frames[0].image.pixel(0, 0)), 10);
+    EXPECT_EQ(qRed(frames[2].image.pixel(0, 0)), 30);
+    EXPECT_EQ(qRed(frames[3].image.pixel(0, 0)), 40);
+    EXPECT_EQ(frames[3].durationMs, 0);
+}
+
+TEST(SpriteSheet, ALoopingAnimationHasNoRestFrame)
+{
+    const QSize frame(2, 2);
+    const auto sheet = makeSheet(3, frame);
+    const auto spec = specFor(frame, {QPoint(0, 0), QPoint(2, 0)});
+
+    EXPECT_FALSE(spec.playsOnce());
+    EXPECT_EQ(sliceSpriteSheet(sheet, spec, PLENTY).size(), 2U);
+}
+
+TEST(SpriteSheet, TheCacheKeyKnowsAboutPlaysAndInstances)
+{
+    const QSize frame(2, 2);
+    auto a = specFor(frame, {QPoint(0, 0), QPoint(2, 0)});
+    auto b = a;
+    EXPECT_EQ(a.cacheKey(), b.cacheKey());
+
+    b.loopCount = 2;
+    EXPECT_NE(a.cacheKey(), b.cacheKey());
+
+    auto c = b;
+    c.instanceId = 1;
+    EXPECT_NE(b.cacheKey(), c.cacheKey());
+}

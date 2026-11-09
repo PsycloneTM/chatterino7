@@ -2,6 +2,7 @@
 
 #include <QImage>
 #include <QPoint>
+#include <QtGlobal>
 #include <QSize>
 #include <QString>
 
@@ -57,6 +58,27 @@ struct SpriteSheetSpec {
     /// Applied to every frame, in order.
     std::vector<SpriteColorFilter> filters;
 
+    /// How often the frames are played. 0 means forever. For a number above
+    /// 0 the animation plays that many times and then stays on one frame
+    /// (`restOffset`): the first frame, or the last one if the CSS has
+    /// `animation-fill-mode: forwards`.
+    int loopCount = 0;
+
+    /// Where the frame the animation ends on is. Only used if `loopCount`
+    /// is above 0.
+    QPoint restOffset;
+
+    /// Only used to keep specs apart that are otherwise equal. An animation
+    /// that plays once starts when its image is loaded, so every message
+    /// that should start it again needs an image of its own.
+    quint64 instanceId = 0;
+
+    /// Plays a limited number of times and then stops.
+    bool playsOnce() const
+    {
+        return this->loopCount > 0 && this->offsets.size() > 1;
+    }
+
     bool isValid() const;
     bool animated() const
     {
@@ -80,6 +102,10 @@ struct SpriteFrame {
 /// Returns nothing if the spec is invalid or the sheet is null. If all the
 /// frames together would need more than `maxBytes` of memory, only the first
 /// frame is returned (a static image is better than none).
+///
+/// For a spec that `playsOnce()`, one more frame is returned after the frames
+/// of `offsets`: the one the animation rests on (duration 0). It is missing if
+/// only the first frame was returned because of `maxBytes`.
 ///
 /// Frames are returned as `QImage::Format_ARGB32`. Every frame takes at least
 /// 20 ms: that is the resolution of the animation clock, and anything faster

@@ -43,7 +43,7 @@ public:
     /// without emotes, so the server holds them back until then.
     pajlada::Signals::NoArgSignal ready;
 
-    /// Downloads both manifests and the stylesheet. Does nothing if a load is
+    /// Downloads both manifests and both stylesheets. Does nothing if a load is
     /// already running.
     /// A failed download keeps what was loaded before.
     void load();
@@ -69,9 +69,10 @@ public:
     DggEmoteContext emoteContextFor(const DggUser &user, bool isAction,
                                     bool backlog) const;
 
-    /// Badge images for the user's flairs, in the order of the user's
-    /// `features` (that's the order chat-gui draws them in). Flairs without
-    /// an image are skipped.
+    /// Badge images for the user's flairs. chat-gui draws them in a flex row,
+    /// so the CSS `order` of `flairs.css` decides (lower first), and flairs
+    /// with the same value stay in the order of the user's `features`. Flairs
+    /// without an image are skipped.
     std::vector<EmotePtr> badgesFor(const DggUser &user) const;
 
     /// How the nick is drawn, from the user's flairs.
@@ -105,7 +106,15 @@ private:
 
         /// The stylesheet has rules that depend on the user or the message.
         bool contextual = false;
+
+        /// The style `emote` was built from (for a plain context).
+        DggEmoteStyle style;
     };
+
+    /// `style` for one use of an emote that plays a limited number of times.
+    /// Such an animation starts when its image is loaded, so every message
+    /// gets an image of its own (in the browser, each message plays it).
+    DggEmoteStyle withOwnPlay(DggEmoteStyle style) const;
 
     void fetch(const QString &url,
                std::function<void(const QJsonArray &)> onData);
@@ -114,6 +123,11 @@ private:
     void onFetchFinished();
     void applyEmotes(const QJsonArray &json);
     void applyFlairs(const QJsonArray &json);
+    void applyFlairCss(const QString &css);
+
+    /// Badges from the flair manifest, plus the ones only the stylesheet
+    /// knows about. Needs both to be called again when either one arrives.
+    void rebuildBadges();
     void applyCss(const QString &css);
 
     /// Rebuilds every emote from the manifest and the stylesheet.
@@ -126,7 +140,15 @@ private:
     /// `EmoteEntry::emote`, by emote name and style.
     mutable StringMap<EmotePtr> styled_;
     std::vector<DggFlairDef> flairs_;
+
+    /// Flairs that have an image in `flairs.css`. The manifest misses some.
+    std::vector<DggFlairDef> cssFlairs_;
     StringMap<EmotePtr> badges_;
+
+    /// CSS `order` of the badges that have one, by flair name.
+    StringMap<int> badgeOrder_;
+
+    mutable quint64 nextPlayId_ = 0;
 
     bool loading_ = false;
     bool ready_ = false;

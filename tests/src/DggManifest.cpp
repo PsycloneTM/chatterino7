@@ -185,3 +185,55 @@ TEST(DggManifest, ParsesPatreonMemberFromMsg)
     EXPECT_TRUE(user.patreonMember);
     EXPECT_EQ(user.subTier, 0);
 }
+
+TEST(DggManifest, FlairCss)
+{
+    const QString css = R"(
+:root { --x: 1; }
+/* .flair.commented { background-image: url("no.png"); } */
+.flair.flair4 {
+  background-image: url("69b8e8a871fe3.png");
+  height: 16px;
+  width: 17px;
+  order: 127;
+}
+.flair.flair2 {
+  display: none !important;
+}
+.flair.bot { background-image: url('bot.png'); height: 16px; width: 16px; }
+.user.bot { color: #0088CC; }
+.flair.flair33 {
+  background-image: url(https://example.com/a/flair33.png);
+  height: 19px;
+  width: 18px;
+}
+.user.flair33 { color: transparent; }
+.msg-chat:not(.msg-whisper) .user.flair33:hover::before { content: ""; }
+.flair.flair4 { width: 20px; }
+)";
+
+    auto flairs =
+        parseDggFlairCss(css, "https://cdn.destiny.gg/flairs/flairs.css");
+
+    // flair2 is hidden, `commented` is a comment, the `.user` rules are not
+    // badges
+    ASSERT_EQ(flairs.size(), 3U);
+
+    EXPECT_EQ(flairs[0].name, "flair4");
+    EXPECT_EQ(flairs[0].label, "flair4");
+    EXPECT_EQ(flairs[0].image.url,
+              "https://cdn.destiny.gg/flairs/69b8e8a871fe3.png");
+    EXPECT_EQ(flairs[0].image.height, 16);
+    // the later rule wins per property
+    EXPECT_EQ(flairs[0].image.width, 20);
+    EXPECT_FALSE(flairs[0].colorsNick());
+    EXPECT_EQ(flairs[0].order, 127);
+    EXPECT_EQ(flairs[1].order, 0);
+
+    EXPECT_EQ(flairs[1].name, "bot");
+    EXPECT_EQ(flairs[1].image.url, "https://cdn.destiny.gg/flairs/bot.png");
+
+    EXPECT_EQ(flairs[2].name, "flair33");
+    EXPECT_EQ(flairs[2].image.url, "https://example.com/a/flair33.png");
+    EXPECT_EQ(flairs[2].image.width, 18);
+}

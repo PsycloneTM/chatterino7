@@ -462,3 +462,46 @@ TEST(DggEmoteCss, StylesThatDrawTheSameShareAKey)
     EXPECT_TRUE(a.cacheKey() == b.cacheKey());
     EXPECT_TRUE(a.cacheKey() != c.cacheKey());
 }
+
+TEST(DggEmoteCss, AskersPlaysFourTimesAndRestsOnTheFirstFrame)
+{
+    const auto style = css().resolve(QStringLiteral("Askers"),
+                                     userContext("someone"), QSize(5544, 34));
+    ASSERT_TRUE(style.valid);
+    EXPECT_EQ(style.sprite.loopCount, 4);
+    EXPECT_TRUE(style.sprite.playsOnce());
+    // no `forwards`: it goes back to the element's own position
+    EXPECT_EQ(style.sprite.restOffset, QPoint(0, 0));
+}
+
+TEST(DggEmoteCss, AwarePlaysOnceAndStaysOnTheLastFrame)
+{
+    const auto style = css().resolve(QStringLiteral("Aware"),
+                                     userContext("someone"), QSize(1152, 32));
+    ASSERT_TRUE(style.valid);
+    EXPECT_EQ(style.sprite.loopCount, 1);
+    // `forwards` keeps the end of the keyframes: the 32nd frame of the sheet,
+    // which is one past the 31 that steps(31) shows
+    EXPECT_EQ(style.sprite.restOffset, QPoint(31 * 36, 0));
+}
+
+TEST(DggEmoteCss, BingqilinPlaysOnceAndGoesBackToItsOwnFrame)
+{
+    const auto style = css().resolve(QStringLiteral("BINGQILIN"),
+                                     userContext("someone"), QSize(6390, 32));
+    ASSERT_TRUE(style.valid);
+    EXPECT_EQ(style.sprite.loopCount, 1);
+    EXPECT_EQ(style.sprite.restOffset, QPoint(2848, 0));
+}
+
+TEST(DggEmoteCss, InfiniteAnimationsKeepLooping)
+{
+    const auto style = css().resolve(QStringLiteral("dggL"),
+                                     userContext("someone"), QSize(825, 35));
+    ASSERT_TRUE(style.valid);
+    if (style.animated())
+    {
+        EXPECT_EQ(style.sprite.loopCount, 0);
+        EXPECT_FALSE(style.sprite.playsOnce());
+    }
+}
