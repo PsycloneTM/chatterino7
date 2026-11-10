@@ -497,6 +497,20 @@ PosedNativeFrames composePosedNativeFrames(
         nativeTotal += nativeDuration(i);
     }
 
+    if (poseCount == 1 && spec.loopCount <= 0)
+    {
+        // one pose that never changes (a flip): every native frame, posed
+        out.loopFrom = 0;
+        for (size_t i = 0; i < nativeCount; i++)
+        {
+            out.frames.push_back(SpriteFrame{
+                .image = applySpritePose(sources[i], spec.poses.front()),
+                .durationMs = static_cast<int>(nativeDuration(i)),
+            });
+        }
+        return out;
+    }
+
     const qint64 frameBytes =
         std::max<qint64>(1, static_cast<qint64>(sources.front().width()) *
                                 sources.front().height() * 4);

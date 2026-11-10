@@ -1707,12 +1707,22 @@ void expandAnimation(Props &props, string_view value)
     props["animation-delay"] = "0s";
 
     // only the first animation of a list is looked at
-    const auto first = splitTopLevel(value, ',').front();
+    const auto firstRaw = splitTopLevel(value, ',').front();
+
+    // `var(--t-NoTears)` stands for a time (or anything else), so it is
+    // replaced before the entry is split into tokens; a variable that can't
+    // be resolved is left out rather than taken for the animation's name
+    const auto resolvedFirst = resolveVars(firstRaw, props);
+    const string first = resolvedFirst ? *resolvedFirst : string(firstRaw);
 
     bool durationSeen = false;
     for (const auto &token : splitWhitespace(first))
     {
         const auto lower = toLower(token);
+        if (lower.find("var(") != string::npos)
+        {
+            continue;
+        }
         if (startsWith(lower, "calc(") || parseTimeMs(token))
         {
             if (!durationSeen)
@@ -2398,7 +2408,9 @@ string withoutTranslations(string_view transform)
 void applyStaticTransform(const Props &props, DggEmoteStyle &style,
                           std::vector<string> &notes)
 {
-    if (style.sprite.hasPoses() || style.sprite.offsets.size() < 2)
+    // (also for a single frame: RapThis next to another emote is a still or
+    // looping image that has to face the other way)
+    if (style.sprite.hasPoses())
     {
         return;
     }
@@ -2495,8 +2507,38 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
         return style;  // not valid: no size
     }
 
-    const double sheetW = sheetSize.width();
-    const double sheetH = sheetSize.height();
+    // `background-size: 32px 32px` (or one value for both) shrinks or
+    // stretches the whole image, e.g. a 500px GIF drawn at 32px (BlueWave).
+    if (const auto *raw = get("background-size"))
+    {
+        if (const auto resolved = resolveVars(*raw, props))
+        {
+            const string_view text = trimView(*resolved);
+            const auto space = text.find(' ');
+            const auto first = parseLengthPx(text.substr(0, space));
+            const auto second = space == string_view::npos
+                                    ? first
+                                    : parseLengthPx(text.substr(space + 1));
+            if (first && second && *first >= 1 && *second >= 1)
+            {
+                style.backgroundSize =
+                    QSize(static_cast<int>(std::lround(*first)),
+                          static_cast<int>(std::lround(*second)));
+            }
+            else if (text != "auto" && text != "initial")
+            {
+                notes.emplace_back("background-size " + string(text));
+            }
+        }
+    }
+    // `background-position` is measured against the image as it is drawn: with
+    // `background-size`, that is the scaled image, not the file. BlueWave
+    // (500px GIF at 32px, `background-position: center`) needs this, or the
+    // middle 32px of the big image is shown instead of the whole picture.
+    const QSize drawnSheet =
+        style.backgroundSize.isEmpty() ? sheetSize : style.backgroundSize;
+    const double sheetW = drawnSheet.width();
+    const double sheetH = drawnSheet.height();
 
     // where the static image sits
     double x0 = 0;
@@ -2761,30 +2803,6 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
         style.sprite.tileY = tileY;
     }
 
-    // `background-size: 32px 32px` (or one value for both) shrinks or
-    // stretches the whole image, e.g. a 500px GIF drawn at 32px (BlueWave).
-    if (const auto *raw = get("background-size"))
-    {
-        if (const auto resolved = resolveVars(*raw, props))
-        {
-            const string_view text = trimView(*resolved);
-            const auto space = text.find(' ');
-            const auto first = parseLengthPx(text.substr(0, space));
-            const auto second = space == string_view::npos
-                                    ? first
-                                    : parseLengthPx(text.substr(space + 1));
-            if (first && second && *first >= 1 && *second >= 1)
-            {
-                style.backgroundSize =
-                    QSize(static_cast<int>(std::lround(*first)),
-                          static_cast<int>(std::lround(*second)));
-            }
-            else if (text != "auto" && text != "initial")
-            {
-                notes.emplace_back("background-size " + string(text));
-            }
-        }
-    }
     bakeAnimations(props, keyframes, style, sheetSize, notes);
     applyStaticTransform(props, style, notes);
 
