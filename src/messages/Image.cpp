@@ -942,8 +942,13 @@ void Image::actuallyLoad()
                     << "->" << native.size() << "native frames,"
                     << frames.size() << "frames in all, loops from"
                     << composed.loopFrom;
+                // `loopFrom` 0 is an ordinary endless loop (a flip, or poses
+                // that repeat for ever): it has to follow the shared clock
+                // like every other looping image, or two copies of an emote
+                // (one flipped, one not) would drift apart. Only a part that
+                // plays first and then loops from later on starts at frame 0.
                 assignFrames(shared, std::move(frames), false,
-                             composed.loopFrom);
+                             composed.loopFrom > 0 ? composed.loopFrom : -1);
                 return;
             }
 
