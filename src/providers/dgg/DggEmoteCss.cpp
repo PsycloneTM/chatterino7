@@ -1706,8 +1706,25 @@ void expandAnimation(Props &props, string_view value)
     props["animation-direction"] = "normal";
     props["animation-delay"] = "0s";
 
-    // only the first animation of a list is looked at
-    const auto firstRaw = splitTopLevel(value, ',').front();
+    // Only one animation of a list is looked at: the first, unless a later
+    // one steps through the sprite sheet and the first doesn't. KYSNOW's list
+    // starts with a smooth 0.5s nudge, then has the flash, then the lightning
+    // frames (`steps(49)`); looking only at the nudge left it a still picture.
+    // Lists that already start with a `steps()` entry are unchanged.
+    const auto entries = splitTopLevel(value, ',');
+    size_t chosen = 0;
+    if (toLower(entries.front()).find("steps(") == string::npos)
+    {
+        for (size_t i = 1; i < entries.size(); i++)
+        {
+            if (toLower(entries[i]).find("steps(") != string::npos)
+            {
+                chosen = i;
+                break;
+            }
+        }
+    }
+    const auto firstRaw = entries[chosen];
 
     // `var(--t-NoTears)` stands for a time (or anything else), so it is
     // replaced before the entry is split into tokens; a variable that can't
