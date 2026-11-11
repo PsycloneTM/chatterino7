@@ -1,5 +1,8 @@
 #include "providers/dgg/DggChannel.hpp"
 
+#include "messages/Message.hpp"
+#include "messages/MessageFlag.hpp"
+
 namespace chatterino {
 
 const QString &DggChannel::channelName()
@@ -49,6 +52,30 @@ bool DggChannel::markSeen(const QString &key)
         this->seenOrder_.pop_front();
     }
     return true;
+}
+
+void DggChannel::disableMessagesFrom(const QString &nick)
+{
+    const auto loginName = nick.toLower();
+    if (loginName.isEmpty())
+    {
+        return;
+    }
+
+    for (const auto &message : this->getMessageSnapshot())
+    {
+        if (message->loginName != loginName)
+        {
+            continue;
+        }
+        if (message->flags.hasAny({MessageFlag::System, MessageFlag::Timeout,
+                                   MessageFlag::Whisper}))
+        {
+            continue;
+        }
+
+        message->flags.set(MessageFlag::Disabled);
+    }
 }
 
 }  // namespace chatterino

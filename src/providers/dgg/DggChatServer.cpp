@@ -181,6 +181,14 @@ void DggChatServer::handleFrame(const DggFrame &frame)
             return;
         }
 
+        // A muted or banned user's earlier messages are greyed out, like a
+        // timeout on Twitch. Only once per event: the key above is what keeps
+        // a replayed backlog from doing it twice.
+        if (name == "MUTE"_L1 || name == "BAN"_L1)
+        {
+            chan->disableMessagesFrom(obj.value("data"_L1).toString());
+        }
+
         chan->addMessage(
             DggMessageBuilder::makeSystemLine(
                 chan.get(), QDateTime::fromMSecsSinceEpoch(timestampMs), text,

@@ -40,6 +40,14 @@ public:
     /// Must be called from the GUI thread.
     bool markSeen(const QString &key);
 
+    /// Greys out every message already in the channel from this nick, like a
+    /// timeout does on Twitch (the Disabled flag draws the dimmed overlay).
+    ///
+    /// System lines (including the mute notice itself) are left alone, and
+    /// messages that arrive later aren't touched, so someone who is unmuted
+    /// speaks normally again. Must be called from the GUI thread.
+    void disableMessagesFrom(const QString &nick);
+
 private:
     static constexpr size_t MAX_SEEN_KEYS = 2000;
 
