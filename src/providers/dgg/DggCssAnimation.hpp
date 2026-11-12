@@ -128,6 +128,39 @@ struct Clip {
     bool operator==(const Clip &) const = default;
 };
 
+/// A length that can also be `auto`: box offsets (`left`, `top`, ...), sizes
+/// and `line-height` (where `auto` stands for `normal`). A unitless
+/// `line-height` is kept as a percentage of the font size.
+struct LenOrAuto {
+    bool isAuto = true;
+    Length len;
+
+    bool operator==(const LenOrAuto &) const = default;
+};
+
+/// `content`. `none` and `normal` make no box at all.
+struct Content {
+    bool none = true;
+    std::string text;
+
+    bool operator==(const Content &) const = default;
+};
+
+/// One `box-shadow`.
+struct Shadow {
+    bool inset = false;
+    double x = 0;
+    double y = 0;
+    double blur = 0;
+    double spread = 0;
+    /// r, g, b in 0..255, alpha in 0..1
+    std::array<double, 4> rgba{0, 0, 0, 1};
+
+    bool operator==(const Shadow &) const = default;
+};
+
+using ShadowList = std::vector<Shadow>;
+
 enum class Prop {
     Transform,
     Translate,
@@ -137,9 +170,23 @@ enum class Prop {
     Filter,
     Origin,
     Clip,
+    // Properties of a `::before` / `::after` box (see bakeLayers()). They
+    // are not used for the emote's own animations.
+    Left,
+    Right,
+    Top,
+    Bottom,
+    Width,
+    Height,
+    FontSize,
+    LineHeight,
+    LetterSpacing,
+    ContentText,
+    BoxShadow,
 };
 
-using Value = std::variant<TransformList, double, FilterList, Origin, Clip>;
+using Value = std::variant<TransformList, double, FilterList, Origin, Clip,
+                           LenOrAuto, Content, ShadowList>;
 
 /// What the emote looks like at one moment, apart from its image.
 struct Computed {
@@ -151,6 +198,20 @@ struct Computed {
     FilterList filter;
     Origin origin;
     Clip clip;
+
+    // `::before` / `::after` boxes only
+    LenOrAuto left;
+    LenOrAuto right;
+    LenOrAuto top;
+    LenOrAuto bottom;
+    LenOrAuto width;
+    LenOrAuto height;
+    double fontSize = 16;
+    /// `auto` is `normal`
+    LenOrAuto lineHeight;
+    double letterSpacing = 0;
+    Content content;
+    ShadowList boxShadow;
 
     bool operator==(const Computed &) const = default;
 };
@@ -250,6 +311,10 @@ struct Keyframe {
 Value getProp(const Computed &state, Prop prop);
 void setProp(Computed &state, Prop prop, Value value);
 
+/// A CSS colour (`#rgb`, `#rrggbb`, `rgb()`, `rgba()`, `black`, `white`,
+/// `transparent`) as r, g, b in 0..255 and alpha in 0..1.
+std::optional<std::array<double, 4>> parseColorValue(std::string_view text);
+
 /// Parses one declaration. Returns nothing if the property isn't one of the
 /// supported ones or its value isn't understood.
 std::optional<std::pair<Prop, Value>> parseDeclaration(
@@ -333,6 +398,39 @@ struct Baked {
 std::optional<Baked> bake(const std::vector<Animation> &animations,
                           const Computed &base, const Box &box,
                           const BakeOptions &options, std::string &problem);
+
+/// One element (a `::before` or `::after` box) with its animations.
+struct LayerInput {
+    std::vector<Animation> animations;
+    Computed base;
+};
+
+struct BakedLayerFrame {
+    /// One state per layer, in the order of the input.
+    std::vector<Computed> layers;
+    int durationMs = 0;
+};
+
+struct BakedLayers {
+    std::vector<BakedLayerFrame> frames;
+    /// What every layer looks like once all the animations are over.
+    std::vector<Computed> rest;
+    bool truncated = false;
+};
+
+/// Bakes several elements that run on one clock (the `::before` and the
+/// `::after` of an emote). Every animation must have a finite end; the
+/// baked part ends when the last of them does (a negative delay counts).
+/// `box` is the containing block that percentages refer to. Returns nothing
+/// (with `problem` set) if nothing moves or an animation never ends.
+std::optional<BakedLayers> bakeLayers(const std::vector<LayerInput> &layers,
+                                      const Box &box,
+                                      const BakeOptions &options,
+                                      std::string &problem);
+
+/// The same without the transform origin: what `matrix(a, b, c, d, e, f)`
+/// would be if the origin were the top-left corner.
+Matrix matrixWithoutOrigin(const Computed &state, const Box &box);
 
 /// The matrix of a state for an element of size `box`, with the transform
 /// origin folded in: it maps a point of the element (0,0 is its top-left

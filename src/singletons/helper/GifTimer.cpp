@@ -10,6 +10,8 @@
 
 #include <QApplication>
 
+#include <algorithm>
+
 namespace chatterino {
 
 void GIFTimer::initialize()
@@ -28,7 +30,21 @@ void GIFTimer::initialize()
         }
     });
 
+    this->wall_.start();
+
     QObject::connect(&this->timer, &QTimer::timeout, [this] {
+        // position follows wall time (like a browser), not the number of
+        // ticks: QTimer drops ticks while the GUI thread is busy
+        const auto now = this->wall_.elapsed();
+        const auto delta = now - this->lastWall_;
+        this->lastWall_ = now;
+
+        // the clock never pauses (a browser's doesn't either): when the
+        // window is idle only the redraws stop, and animations come back
+        // in the right phase
+        this->position_ += static_cast<unsigned long>(
+            std::clamp<qint64>(delta, 1, 60000));
+
         if (getSettings()->animationsWhenFocused &&
             this->openOverlayWindows_ == 0 &&
             QApplication::activeWindow() == nullptr)
@@ -36,7 +52,6 @@ void GIFTimer::initialize()
             return;
         }
 
-        this->position_ += GIF_FRAME_LENGTH;
         this->signal.invoke();
         getApp()->getWindows()->repaintGifEmotes();
     });

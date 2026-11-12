@@ -278,6 +278,287 @@ std::optional<string_view> callArgs(string_view call, string_view name)
     return call.substr(name.size() + 1, call.size() - name.size() - 2);
 }
 
+/// `auto`, or a length in px or % (a bare 0 too).
+std::optional<LenOrAuto> parseLenOrAuto(string_view text)
+{
+    text = trim(text);
+    if (lower(text) == "auto")
+    {
+        return LenOrAuto{};
+    }
+    if (const auto length = parseLength(text))
+    {
+        return LenOrAuto{false, *length};
+    }
+    return std::nullopt;
+}
+
+/// `normal`/`initial`, a length, a percentage or a bare number (a multiple of
+/// the font size, kept as a percentage).
+std::optional<LenOrAuto> parseLineHeight(string_view text)
+{
+    text = trim(text);
+    const string l = lower(text);
+    if (l == "normal" || l == "initial")
+    {
+        return LenOrAuto{};
+    }
+    if (const auto length = parseLength(text))
+    {
+        return LenOrAuto{false, *length};
+    }
+    if (const auto number = parseNumber(text); number && *number >= 0)
+    {
+        return LenOrAuto{false, Length{*number * 100.0, true}};
+    }
+    return std::nullopt;
+}
+
+int hexDigit(char c)
+{
+    if (c >= '0' && c <= '9')
+    {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f')
+    {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F')
+    {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
+/// `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb()`, `rgba()` (comma
+/// separated), `transparent`, `black` and `white`.
+std::optional<std::array<double, 4>> parseColor(string_view text)
+{
+    text = trim(text);
+    const string l = lower(text);
+    if (l == "transparent")
+    {
+        return std::array<double, 4>{0, 0, 0, 0};
+    }
+    if (l == "black")
+    {
+        return std::array<double, 4>{0, 0, 0, 1};
+    }
+    if (l == "white")
+    {
+        return std::array<double, 4>{255, 255, 255, 1};
+    }
+    if (!text.empty() && text.front() == '#')
+    {
+        const auto digits = text.substr(1);
+        std::array<int, 8> v{};
+        for (size_t i = 0; i < digits.size(); i++)
+        {
+            if (i >= v.size() || hexDigit(digits[i]) < 0)
+            {
+                return std::nullopt;
+            }
+            v[i] = hexDigit(digits[i]);
+        }
+        if (digits.size() == 3 || digits.size() == 4)
+        {
+            return std::array<double, 4>{
+                static_cast<double>(v[0] * 17), static_cast<double>(v[1] * 17),
+                static_cast<double>(v[2] * 17),
+                digits.size() == 4 ? v[3] * 17 / 255.0 : 1.0};
+        }
+        if (digits.size() == 6 || digits.size() == 8)
+        {
+            return std::array<double, 4>{
+                static_cast<double>(v[0] * 16 + v[1]),
+                static_cast<double>(v[2] * 16 + v[3]),
+                static_cast<double>(v[4] * 16 + v[5]),
+                digits.size() == 8 ? (v[6] * 16 + v[7]) / 255.0 : 1.0};
+        }
+        return std::nullopt;
+    }
+    for (const char *name : {"rgba", "rgb"})
+    {
+        if (const auto args = callArgs(text, name))
+        {
+            const auto parts = splitTop(*args, ',');
+            if (parts.size() != 3 && parts.size() != 4)
+            {
+                return std::nullopt;
+            }
+            std::array<double, 4> out{0, 0, 0, 1};
+            for (size_t i = 0; i < 3; i++)
+            {
+                const auto n = parseNumber(parts[i]);
+                if (!n)
+                {
+                    return std::nullopt;
+                }
+                out[i] = clamp(*n, 0.0, 255.0);
+            }
+            if (parts.size() == 4)
+            {
+                const auto a = parseNumber(parts[3]);
+                if (!a)
+                {
+                    return std::nullopt;
+                }
+                out[3] = clamp(*a, 0.0, 1.0);
+            }
+            return out;
+        }
+    }
+    return std::nullopt;
+}
+
+/// `none`, or a comma separated list of
+/// `[inset] <x> <y> [<blur> [<spread>]] [<color>]`.
+std::optional<ShadowList> parseShadowList(string_view text)
+{
+    text = trim(text);
+    if (lower(text) == "none")
+    {
+        return ShadowList{};
+    }
+    ShadowList out;
+    for (const auto entry : splitTop(text, ','))
+    {
+        Shadow shadow;
+        std::vector<double> numbers;
+        bool haveColor = false;
+        for (const auto token : splitSpace(entry))
+        {
+            if (lower(token) == "inset")
+            {
+                shadow.inset = true;
+            }
+            else if (const auto length = parseLength(token))
+            {
+                if (length->percent)
+                {
+                    return std::nullopt;
+                }
+                numbers.push_back(length->value);
+            }
+            else if (const auto color = parseColor(token))
+            {
+                if (haveColor)
+                {
+                    return std::nullopt;
+                }
+                shadow.rgba = *color;
+                haveColor = true;
+            }
+            else
+            {
+                return std::nullopt;
+            }
+        }
+        if (numbers.size() < 2 || numbers.size() > 4)
+        {
+            return std::nullopt;
+        }
+        shadow.x = numbers[0];
+        shadow.y = numbers[1];
+        shadow.blur = numbers.size() > 2 ? std::max(0.0, numbers[2]) : 0.0;
+        shadow.spread = numbers.size() > 3 ? numbers[3] : 0.0;
+        out.push_back(shadow);
+    }
+    return out;
+}
+
+void appendUtf8(string &out, unsigned long cp)
+{
+    if (cp < 0x80)
+    {
+        out.push_back(static_cast<char>(cp));
+    }
+    else if (cp < 0x800)
+    {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+    else if (cp < 0x10000)
+    {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+    else
+    {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+/// `none`, `normal`, or one quoted string (with CSS escapes). The text is
+/// UTF-8, like the stylesheet.
+std::optional<Content> parseContent(string_view text)
+{
+    text = trim(text);
+    const string l = lower(text);
+    if (l == "none" || l == "normal")
+    {
+        return Content{};
+    }
+    if (text.size() < 2 || (text.front() != '"' && text.front() != '\'') ||
+        text.back() != text.front())
+    {
+        return std::nullopt;
+    }
+    const char quote = text.front();
+    const auto inner = text.substr(1, text.size() - 2);
+    Content out;
+    out.none = false;
+    for (size_t i = 0; i < inner.size(); i++)
+    {
+        const char c = inner[i];
+        if (c == quote)
+        {
+            return std::nullopt;  // several strings
+        }
+        if (c != '\\')
+        {
+            out.text.push_back(c);
+            continue;
+        }
+        i++;
+        if (i >= inner.size())
+        {
+            return std::nullopt;
+        }
+        if (hexDigit(inner[i]) >= 0)
+        {
+            unsigned long cp = 0;
+            size_t digits = 0;
+            while (i < inner.size() && digits < 6 && hexDigit(inner[i]) >= 0)
+            {
+                cp = cp * 16 + static_cast<unsigned long>(hexDigit(inner[i]));
+                i++;
+                digits++;
+            }
+            if (i < inner.size() && isSpace(inner[i]))
+            {
+                i++;
+            }
+            i--;
+            appendUtf8(out.text, cp);
+        }
+        else if (inner[i] == '\n')
+        {
+            // a line continuation
+        }
+        else
+        {
+            out.text.push_back(inner[i]);
+        }
+    }
+    return out;
+}
+
 std::optional<TransformList> parseTransformList(string_view text)
 {
     text = trim(text);
@@ -372,16 +653,34 @@ std::optional<TransformList> parseTransformList(string_view text)
                 fn.y = *y;
             }
         }
-        else if (name == "rotate" || name == "rotatez")
+        else if (name == "rotate" || name == "rotatez" || name == "rotate3d")
         {
             fn.kind = TransformFn::Kind::Rotate;
-            const auto angle =
-                args.size() == 1 ? parseAngleDeg(args[0]) : std::nullopt;
+            double sign = 1;
+            std::optional<double> angle;
+            if (name == "rotate3d")
+            {
+                // only a turn around the z axis is a flat rotation
+                const auto x = number(0);
+                const auto y = number(1);
+                const auto z = number(2);
+                if (args.size() != 4 || !x || !y || !z || *x != 0 || *y != 0 ||
+                    *z == 0)
+                {
+                    return std::nullopt;
+                }
+                sign = *z > 0 ? 1 : -1;
+                angle = parseAngleDeg(args[3]);
+            }
+            else
+            {
+                angle = args.size() == 1 ? parseAngleDeg(args[0]) : std::nullopt;
+            }
             if (!angle)
             {
                 return std::nullopt;
             }
-            fn.n[0] = *angle;
+            fn.n[0] = sign * *angle;
         }
         else if (name == "scale" || name == "scalex" || name == "scaley" ||
                  name == "scale3d")
@@ -1015,6 +1314,85 @@ FilterList lerpFilters(const FilterList &from, const FilterList &to, double t)
     return out;
 }
 
+/// Lengths that may be `auto`. `auto` can't be interpolated: the value
+/// flips halfway. A percentage and a px value are both brought to px (against
+/// `reference`) unless `mixUnits` is false.
+Value interpolateLenOrAuto(const Value &from, const Value &to, double t,
+                           double reference, bool mixUnits)
+{
+    const auto &a = std::get<LenOrAuto>(from);
+    const auto &b = std::get<LenOrAuto>(to);
+    if (a.isAuto || b.isAuto)
+    {
+        return t < 0.5 ? from : to;
+    }
+    if (a.len.percent == b.len.percent)
+    {
+        return LenOrAuto{false,
+                         Length{lerp(a.len.value, b.len.value, t),
+                                a.len.percent}};
+    }
+    if (!mixUnits)
+    {
+        return t < 0.5 ? from : to;
+    }
+    return LenOrAuto{false, Length{lerp(toPx(a.len, reference),
+                                        toPx(b.len, reference), t),
+                                   false}};
+}
+
+Shadow blendShadows(const Shadow &a, const Shadow &b, double t)
+{
+    Shadow out;
+    out.inset = a.inset;
+    out.x = lerp(a.x, b.x, t);
+    out.y = lerp(a.y, b.y, t);
+    out.blur = lerp(a.blur, b.blur, t);
+    out.spread = lerp(a.spread, b.spread, t);
+    // colours are blended premultiplied, as CSS says
+    const double alpha = lerp(a.rgba[3], b.rgba[3], t);
+    out.rgba[3] = alpha;
+    for (size_t i = 0; i < 3; i++)
+    {
+        const double premultiplied =
+            lerp(a.rgba[i] * a.rgba[3], b.rgba[i] * b.rgba[3], t);
+        out.rgba[i] = alpha > 0 ? premultiplied / alpha : 0;
+    }
+    return out;
+}
+
+/// The shorter list is padded with transparent shadows. Lists whose
+/// shadows don't pair up (inset against outer) flip halfway.
+Value interpolateShadows(const Value &from, const Value &to, double t)
+{
+    auto a = std::get<ShadowList>(from);
+    auto b = std::get<ShadowList>(to);
+    const auto invisibleLike = [](const Shadow &other) {
+        Shadow pad;
+        pad.inset = other.inset;
+        pad.rgba = {other.rgba[0], other.rgba[1], other.rgba[2], 0};
+        return pad;
+    };
+    while (a.size() < b.size())
+    {
+        a.push_back(invisibleLike(b[a.size()]));
+    }
+    while (b.size() < a.size())
+    {
+        b.push_back(invisibleLike(a[b.size()]));
+    }
+    ShadowList out;
+    for (size_t i = 0; i < a.size(); i++)
+    {
+        if (a[i].inset != b[i].inset)
+        {
+            return t < 0.5 ? from : to;
+        }
+        out.push_back(blendShadows(a[i], b[i], t));
+    }
+    return out;
+}
+
 Value interpolate(Prop prop, const Value &from, const Value &to, double t,
                   const Box &box)
 {
@@ -1062,6 +1440,23 @@ Value interpolate(Prop prop, const Value &from, const Value &to, double t,
             }
             return out;
         }
+        case Prop::Left:
+        case Prop::Right:
+        case Prop::Width:
+            return interpolateLenOrAuto(from, to, t, box.width, true);
+        case Prop::Top:
+        case Prop::Bottom:
+        case Prop::Height:
+            return interpolateLenOrAuto(from, to, t, box.height, true);
+        case Prop::LineHeight:
+            return interpolateLenOrAuto(from, to, t, 0, false);
+        case Prop::FontSize:
+        case Prop::LetterSpacing:
+            return lerp(std::get<double>(from), std::get<double>(to), t);
+        case Prop::ContentText:
+            return t < 0.5 ? from : to;
+        case Prop::BoxShadow:
+            return interpolateShadows(from, to, t);
     }
     return from;
 }
@@ -1069,6 +1464,10 @@ Value interpolate(Prop prop, const Value &from, const Value &to, double t,
 constexpr Prop ALL_PROPS[] = {
     Prop::Transform, Prop::Translate, Prop::Rotate, Prop::Scale,
     Prop::Opacity,   Prop::Filter,    Prop::Origin, Prop::Clip,
+    Prop::Left,      Prop::Right,     Prop::Top,    Prop::Bottom,
+    Prop::Width,     Prop::Height,    Prop::FontSize,
+    Prop::LineHeight, Prop::LetterSpacing, Prop::ContentText,
+    Prop::BoxShadow,
 };
 
 /// Declarations that are allowed in keyframes without doing anything.
@@ -1076,6 +1475,7 @@ bool isIgnorableKeyframeProperty(string_view name)
 {
     return name == "animation-timing-function" || name == "z-index" ||
            name == "will-change" || name == "pointer-events" ||
+           name == "mix-blend-mode" ||
            startsWith(name, "-") || startsWith(name, "transition");
 }
 
@@ -1084,6 +1484,11 @@ bool isIgnorableKeyframeProperty(string_view name)
 // ---------------------------------------------------------------------------
 // Matrix
 // ---------------------------------------------------------------------------
+
+std::optional<std::array<double, 4>> parseColorValue(string_view text)
+{
+    return parseColor(text);
+}
 
 Matrix Matrix::translate(double x, double y)
 {
@@ -1479,6 +1884,62 @@ std::optional<std::pair<Prop, Value>> parseDeclaration(string_view name,
             return std::make_pair(Prop::Clip, Value(std::move(*v)));
         }
     }
+    else if (n == "left" || n == "right" || n == "top" || n == "bottom" ||
+             n == "width" || n == "height")
+    {
+        const Prop prop = n == "left"     ? Prop::Left
+                          : n == "right"  ? Prop::Right
+                          : n == "top"    ? Prop::Top
+                          : n == "bottom" ? Prop::Bottom
+                          : n == "width"  ? Prop::Width
+                                          : Prop::Height;
+        if (const auto v = parseLenOrAuto(value))
+        {
+            return std::make_pair(prop, Value(*v));
+        }
+    }
+    else if (n == "font-size" || n == "letter-spacing")
+    {
+        if (n == "letter-spacing" && lower(value) == "normal")
+        {
+            return std::make_pair(Prop::LetterSpacing, Value(0.0));
+        }
+        if (const auto v = parseLength(value); v && !v->percent)
+        {
+            if (n == "font-size")
+            {
+                if (v->value > 0)
+                {
+                    return std::make_pair(Prop::FontSize, Value(v->value));
+                }
+            }
+            else
+            {
+                return std::make_pair(Prop::LetterSpacing, Value(v->value));
+            }
+        }
+    }
+    else if (n == "line-height")
+    {
+        if (const auto v = parseLineHeight(value))
+        {
+            return std::make_pair(Prop::LineHeight, Value(*v));
+        }
+    }
+    else if (n == "content")
+    {
+        if (auto v = parseContent(value))
+        {
+            return std::make_pair(Prop::ContentText, Value(std::move(*v)));
+        }
+    }
+    else if (n == "box-shadow")
+    {
+        if (auto v = parseShadowList(value))
+        {
+            return std::make_pair(Prop::BoxShadow, Value(std::move(*v)));
+        }
+    }
     return std::nullopt;
 }
 
@@ -1502,6 +1963,28 @@ Value getProp(const Computed &state, Prop prop)
             return state.origin;
         case Prop::Clip:
             return state.clip;
+        case Prop::Left:
+            return state.left;
+        case Prop::Right:
+            return state.right;
+        case Prop::Top:
+            return state.top;
+        case Prop::Bottom:
+            return state.bottom;
+        case Prop::Width:
+            return state.width;
+        case Prop::Height:
+            return state.height;
+        case Prop::FontSize:
+            return state.fontSize;
+        case Prop::LineHeight:
+            return state.lineHeight;
+        case Prop::LetterSpacing:
+            return state.letterSpacing;
+        case Prop::ContentText:
+            return state.content;
+        case Prop::BoxShadow:
+            return state.boxShadow;
     }
     return state.transform;
 }
@@ -1533,6 +2016,39 @@ void setProp(Computed &state, Prop prop, Value value)
             break;
         case Prop::Clip:
             state.clip = std::get<Clip>(std::move(value));
+            break;
+        case Prop::Left:
+            state.left = std::get<LenOrAuto>(value);
+            break;
+        case Prop::Right:
+            state.right = std::get<LenOrAuto>(value);
+            break;
+        case Prop::Top:
+            state.top = std::get<LenOrAuto>(value);
+            break;
+        case Prop::Bottom:
+            state.bottom = std::get<LenOrAuto>(value);
+            break;
+        case Prop::Width:
+            state.width = std::get<LenOrAuto>(value);
+            break;
+        case Prop::Height:
+            state.height = std::get<LenOrAuto>(value);
+            break;
+        case Prop::FontSize:
+            state.fontSize = std::get<double>(value);
+            break;
+        case Prop::LineHeight:
+            state.lineHeight = std::get<LenOrAuto>(value);
+            break;
+        case Prop::LetterSpacing:
+            state.letterSpacing = std::get<double>(value);
+            break;
+        case Prop::ContentText:
+            state.content = std::get<Content>(std::move(value));
+            break;
+        case Prop::BoxShadow:
+            state.boxShadow = std::get<ShadowList>(std::move(value));
             break;
     }
 }
@@ -1769,14 +2285,18 @@ std::pair<double, double> originPx(const Origin &origin, const Box &box)
     return {toPx(origin.x, box.width), toPx(origin.y, box.height)};
 }
 
-Matrix matrixOf(const Computed &state, const Box &box)
+Matrix matrixWithoutOrigin(const Computed &state, const Box &box)
 {
     // CSS: translate, rotate and scale apply first (outermost), then
     // `transform`
-    const Matrix m = matrixOfList(state.translate, box) *
-                     matrixOfList(state.rotate, box) *
-                     matrixOfList(state.scale, box) *
-                     matrixOfList(state.transform, box);
+    return matrixOfList(state.translate, box) *
+           matrixOfList(state.rotate, box) * matrixOfList(state.scale, box) *
+           matrixOfList(state.transform, box);
+}
+
+Matrix matrixOf(const Computed &state, const Box &box)
+{
+    const Matrix m = matrixWithoutOrigin(state, box);
     const auto [ox, oy] = originPx(state.origin, box);
     return Matrix::translate(ox, oy) * m * Matrix::translate(-ox, -oy);
 }
@@ -1905,6 +2425,96 @@ std::optional<Baked> bake(const std::vector<Animation> &animations,
 
     // does anything show?
     if (out.frames.size() == 1 && out.frames.front().state == out.rest)
+    {
+        problem = "nothing changes";
+        return std::nullopt;
+    }
+    return out;
+}
+
+std::optional<BakedLayers> bakeLayers(const std::vector<LayerInput> &layers,
+                                      const Box &box,
+                                      const BakeOptions &options,
+                                      string &problem)
+{
+    if (layers.empty())
+    {
+        problem = "no layers";
+        return std::nullopt;
+    }
+    if (options.stepMs <= 0)
+    {
+        problem = "bad step";
+        return std::nullopt;
+    }
+
+    double total = 0;
+    bool any = false;
+    for (const auto &layer : layers)
+    {
+        for (const auto &animation : layer.animations)
+        {
+            const auto &spec = animation.spec();
+            if (spec.infinite())
+            {
+                problem = "infinite animation";
+                return std::nullopt;
+            }
+            if (spec.durationMs <= 0 || spec.iterations <= 0)
+            {
+                continue;
+            }
+            any = true;
+            // a negative delay starts the animation part way through
+            total = std::max(total,
+                             spec.delayMs + spec.durationMs * spec.iterations);
+        }
+    }
+    if (!any || total <= 0)
+    {
+        problem = "no duration";
+        return std::nullopt;
+    }
+
+    BakedLayers out;
+    if (total > options.maxMs)
+    {
+        total = options.maxMs;
+        out.truncated = true;
+    }
+
+    const int count = static_cast<int>(std::ceil(total / options.stepMs - 1e-9));
+    out.frames.reserve(static_cast<size_t>(count));
+    for (int k = 0; k < count; k++)
+    {
+        const double t = k * options.stepMs;
+        const double span = std::min(options.stepMs, total - t);
+        const int duration = std::max(1, static_cast<int>(std::lround(span)));
+
+        BakedLayerFrame frame;
+        frame.durationMs = duration;
+        frame.layers.reserve(layers.size());
+        for (const auto &layer : layers)
+        {
+            frame.layers.push_back(
+                computeAt(layer.animations, layer.base, t, box));
+        }
+        if (!out.frames.empty() && out.frames.back().layers == frame.layers)
+        {
+            out.frames.back().durationMs += duration;
+        }
+        else
+        {
+            out.frames.push_back(std::move(frame));
+        }
+    }
+
+    for (const auto &layer : layers)
+    {
+        out.rest.push_back(computeAt(layer.animations, layer.base, total, box));
+    }
+
+    if (out.frames.size() == 1 && out.frames.front().layers == out.rest)
     {
         problem = "nothing changes";
         return std::nullopt;

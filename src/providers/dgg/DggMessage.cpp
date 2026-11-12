@@ -146,6 +146,11 @@ QDateTime DggChatMessage::time() const
     return QDateTime::fromMSecsSinceEpoch(this->timestampMs);
 }
 
+QDateTime DggDeath::time() const
+{
+    return QDateTime::fromMSecsSinceEpoch(this->timestampMs);
+}
+
 QString dggMessageHash(qint64 timestampMs, qint64 userId, const QString &text)
 {
     QByteArray input = QByteArray::number(timestampMs);
@@ -190,6 +195,21 @@ std::optional<DggChatMessage> parseDggChatMessage(const QJsonObject &obj,
     msg.greentext = msg.text.startsWith(u'>') &&
                     (msg.user.isSubscriber() || msg.user.isPrivileged());
     return msg;
+}
+
+std::optional<DggDeath> parseDggDeath(const QJsonObject &obj, qint64 nowMs)
+{
+    DggDeath death;
+    death.user = DggUser::fromJson(obj);
+    if (death.user.nick.isEmpty())
+    {
+        return std::nullopt;
+    }
+
+    death.cause = obj.value("data"_L1).toString().trimmed();
+    death.durationSeconds = toInt64(obj.value("duration"_L1));
+    death.timestampMs = dggTimestampMs(obj, nowMs);
+    return death;
 }
 
 QString dggModerationText(QStringView event, const QJsonObject &obj)

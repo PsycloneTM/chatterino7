@@ -1,7 +1,9 @@
 #include "providers/dgg/DggMessageBuilder.hpp"
 
 #include "common/LinkParser.hpp"
+#include "messages/Image.hpp"
 #include "messages/MessageElement.hpp"
+#include "messages/SpriteSheet.hpp"
 #include "providers/dgg/DggAssets.hpp"
 #include "providers/dgg/DggChannel.hpp"
 #include "providers/dgg/DggMessage.hpp"
@@ -18,6 +20,23 @@ using namespace chatterino;
 
 /// chat-gui's `$color-green-text`.
 const QColor GREENTEXT_COLOR{0x6c, 0xa5, 0x28};
+
+/// The sheet chat-gui takes its icons from (`img/icons.<hash>.png`). The hash
+/// changes when the site is rebuilt with a new sheet, so if the death icon
+/// goes blank, this is the URL to update.
+const QString ICONS_SHEET_URL = QStringLiteral(
+    "https://cdn.destiny.gg/img/icons.b81b90059d7691309000.png");
+
+/// The warning sign in front of a death line: `.msg-death .user::before` is a
+/// 16x16 box showing the sheet at `background-position: -32px 0`.
+ImagePtr deathIcon()
+{
+    SpriteSheetSpec spec;
+    spec.frameSize = QSize(16, 16);
+    spec.offsets = {QPoint(32, 0)};
+    spec.durationsMs = {100};
+    return Image::fromSpriteSheet(Url{ICONS_SHEET_URL}, spec);
+}
 
 /// Adds one word of user text: an emote if the word is one the author may
 /// use, otherwise a link or plain text.
@@ -251,6 +270,72 @@ MessagePtrMut DggMessageBuilder::makeSystemLine(DggChannel *channel,
                                  MessageColor::System);
     builder->messageText = text;
     builder->searchText = text;
+
+    return builder.release();
+}
+
+MessagePtrMut DggMessageBuilder::makeDeathMessage(DggChannel *channel,
+                                                  const DggDeath &death,
+                                                  bool backlog,
+                                                  const DggAssets &assets)
+{
+    DggMessageBuilder builder(systemMessage, channel, death.time());
+    if (backlog)
+    {
+        builder.markBacklog();
+    }
+    builder->flags.set(MessageFlag::ModerationAction);
+
+    builder.emplace<ImageElement>(deathIcon(), MessageElementFlag::Text);
+
+    const auto &user = death.user;
+    const auto nickStyle = assets.nickStyleFor(user);
+    const auto &nickColor = nickStyle.color;
+    const QString nick = displayedNick(user.nick);
+    auto *nickElement = builder.emplace<TextElement>(
+        nick, MessageElementFlag::Username,
+        nickColor ? MessageColor(*nickColor) : MessageColor::Text,
+        FontStyle::ChatMediumBold);
+    if (nickStyle.rainbow)
+    {
+        nickElement->addFlags(MessageElementFlag::DggRainbowUsername);
+    }
+
+    // The cause is in italics and can contain emotes
+    auto emoteContext = assets.emoteContextFor(user, false, backlog);
+    const QStringList words =
+        death.cause.simplified().split(QChar(u' '), Qt::SkipEmptyParts);
+    const auto elements = collectElements(words, user, assets);
+    emoteContext.elements = elements.names;
+
+    QString causeText;
+    for (qsizetype i = 0; i < words.size(); i++)
+    {
+        const QString &word = words[i];
+        if (!causeText.isEmpty())
+        {
+            causeText.append(u' ');
+        }
+        causeText.append(word);
+
+        emoteContext.elementIndex =
+            elements.indexOfWord[static_cast<size_t>(i)];
+        if (auto emote = assets.emoteFor(word, user, emoteContext))
+        {
+            builder.emplace<EmoteElement>(emote, MessageElementFlag::Emote,
+                                          MessageColor::Text);
+        }
+        else
+        {
+            builder.emplace<TextElement>(word, MessageElementFlag::Text,
+                                         MessageColor::Text,
+                                         FontStyle::ChatMediumItalic);
+        }
+    }
+
+    const QString full = causeText.isEmpty() ? nick : nick + QChar(u' ') + causeText;
+    builder->messageText = full;
+    builder->searchText = full;
 
     return builder.release();
 }

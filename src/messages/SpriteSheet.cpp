@@ -1,11 +1,15 @@
 #include "messages/SpriteSheet.hpp"
 
 #include <QByteArray>
+#include <QColor>
 #include <QCryptographicHash>
+#include <QFont>
+#include <QFontMetricsF>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
 #include <QRect>
+#include <QStringList>
 #include <QTransform>
 
 #include <algorithm>
@@ -13,6 +17,8 @@
 #include <cmath>
 #include <map>
 #include <numeric>
+#include <optional>
+#include <vector>
 
 namespace {
 
@@ -199,6 +205,448 @@ QImage copyFrame(const QImage &source, QPoint offset, QSize size, bool tileX,
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Overlays (the `::before` / `::after` of an emote)
+// ---------------------------------------------------------------------------
+
+int toByte255(double v)
+{
+    return std::clamp(static_cast<int>(std::lround(v)), 0, 255);
+}
+
+QColor toQColor(const std::array<double, 4> &rgba)
+{
+    return QColor(toByte255(rgba[0]), toByte255(rgba[1]), toByte255(rgba[2]),
+                  toByte255(rgba[3] * 255.0));
+}
+
+/// The names of a CSS `font-family` list that are real families. `monospace`
+/// is reported separately, the other generic names are left out (Qt picks
+/// its default for them).
+QStringList cssFamilies(const QString &list, bool &monospace)
+{
+    QStringList out;
+    for (QString part : list.split(QChar(u',')))
+    {
+        part = part.trimmed();
+        if (part.size() >= 2 &&
+            (part.startsWith(QChar(u'"')) || part.startsWith(QChar(u'\''))) &&
+            part.endsWith(part.at(0)))
+        {
+            part = part.mid(1, part.size() - 2);
+        }
+        if (part.isEmpty())
+        {
+            continue;
+        }
+        const QString lower = part.toLower();
+        if (lower == u"monospace")
+        {
+            monospace = true;
+        }
+        else if (lower != u"serif" && lower != u"sans-serif" &&
+                 lower != u"cursive" && lower != u"fantasy")
+        {
+            out.append(part);
+        }
+    }
+    return out;
+}
+
+/// How much bigger than its CSS size the text is measured and drawn. Qt takes
+/// whole pixel sizes only, and 8.5px rounded to 9px is wide enough to wrap a
+/// line that fits in the browser (HACKERMAN's "ID: 420"). The text is laid out
+/// at `kTextScale` times the size and the painter scales it back down.
+constexpr double kTextScale = 8.0;
+
+QFont overlayFont(const SpriteOverlay &o)
+{
+    QFont font;
+    bool monospace = false;
+    QStringList families = cssFamilies(o.fontFamily, monospace);
+    const bool nonAscii =
+        std::any_of(o.text.begin(), o.text.end(),
+                    [](QChar c) { return c.unicode() > 0x7F; });
+    if (nonAscii)
+    {
+        // an emoji: the families that have colour glyphs
+        families << QStringLiteral("Segoe UI Emoji")
+                 << QStringLiteral("Apple Color Emoji")
+                 << QStringLiteral("Noto Color Emoji");
+    }
+    if (!families.isEmpty())
+    {
+        font.setFamilies(families);
+    }
+    if (monospace)
+    {
+        font.setStyleHint(QFont::Monospace);
+        font.setFixedPitch(true);
+    }
+    font.setPixelSize(std::max(
+        1, static_cast<int>(std::lround(o.fontPx * kTextScale))));
+    font.setHintingPreference(QFont::PreferNoHinting);
+    if (o.letterSpacingPx != 0.0)
+    {
+        font.setLetterSpacing(QFont::AbsoluteSpacing,
+                              o.letterSpacingPx * kTextScale);
+    }
+    return font;
+}
+
+/// Breaks `text` at spaces so that no line is wider than `maxWidth` (a word
+/// that is wider stays on a line of its own, as in CSS).
+QStringList wrapText(const QString &text, const QFontMetricsF &metrics,
+                     double maxWidth)
+{
+    QStringList lines;
+    QString current;
+    for (const QString &word : text.split(QChar(u' '), Qt::SkipEmptyParts))
+    {
+        const QString candidate =
+            current.isEmpty() ? word : current + QChar(u' ') + word;
+        if (!current.isEmpty() && metrics.horizontalAdvance(candidate) > maxWidth)
+        {
+            lines.append(current);
+            current = word;
+        }
+        else
+        {
+            current = candidate;
+        }
+    }
+    if (!current.isEmpty())
+    {
+        lines.append(current);
+    }
+    return lines;
+}
+
+/// One pass of a box blur over every pixel channel (premultiplied ARGB32,
+/// outside of the image is transparent).
+void blurPass(QImage &image, int radius, bool horizontal)
+{
+    const int length = horizontal ? image.width() : image.height();
+    const int lines = horizontal ? image.height() : image.width();
+    const int window = 2 * radius + 1;
+
+    std::vector<std::array<int, 4>> in(static_cast<size_t>(length));
+    for (int l = 0; l < lines; l++)
+    {
+        for (int i = 0; i < length; i++)
+        {
+            const int x = horizontal ? i : l;
+            const int y = horizontal ? l : i;
+            const uchar *px = image.constScanLine(y) + 4 * x;
+            for (int c = 0; c < 4; c++)
+            {
+                in[static_cast<size_t>(i)][static_cast<size_t>(c)] = px[c];
+            }
+        }
+
+        std::array<int, 4> sum{0, 0, 0, 0};
+        for (int i = -radius; i <= radius; i++)
+        {
+            if (i >= 0 && i < length)
+            {
+                for (size_t c = 0; c < 4; c++)
+                {
+                    sum[c] += in[static_cast<size_t>(i)][c];
+                }
+            }
+        }
+        for (int i = 0; i < length; i++)
+        {
+            const int x = horizontal ? i : l;
+            const int y = horizontal ? l : i;
+            uchar *px = image.scanLine(y) + 4 * x;
+            for (size_t c = 0; c < 4; c++)
+            {
+                px[c] = static_cast<uchar>(sum[c] / window);
+            }
+            const int leaving = i - radius;
+            const int entering = i + radius + 1;
+            for (size_t c = 0; c < 4; c++)
+            {
+                if (leaving >= 0)
+                {
+                    sum[c] -= in[static_cast<size_t>(leaving)][c];
+                }
+                if (entering < length)
+                {
+                    sum[c] += in[static_cast<size_t>(entering)][c];
+                }
+            }
+        }
+    }
+}
+
+/// A gaussian blur of standard deviation `sigma`, as three box blurs.
+void blurImage(QImage &image, double sigma)
+{
+    if (sigma < 0.3)
+    {
+        return;
+    }
+    const int radius = std::max(1, static_cast<int>(std::lround(sigma - 0.5)));
+    for (int pass = 0; pass < 3; pass++)
+    {
+        blurPass(image, radius, true);
+        blurPass(image, radius, false);
+    }
+}
+
+QImage transparentImage(QSize size)
+{
+    QImage image(size, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    return image;
+}
+
+/// A shadow that falls outside of `box` (CSS never draws it below the box).
+void drawOuterShadow(QImage &target, const QRectF &box, const SpriteShadow &s)
+{
+    const QRectF shape = box.translated(s.x, s.y)
+                             .adjusted(-s.spread, -s.spread, s.spread, s.spread);
+    if (shape.width() <= 0 || shape.height() <= 0)
+    {
+        return;
+    }
+
+    QImage mask = transparentImage(target.size());
+    {
+        QPainter painter(&mask);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(toQColor(s.rgba));
+        painter.drawRect(shape);
+    }
+    blurImage(mask, s.blur / 2.0);
+    {
+        QPainter painter(&mask);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setCompositionMode(QPainter::CompositionMode_DestinationOut);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::black);
+        painter.drawRect(box);
+    }
+    QPainter painter(&target);
+    painter.drawImage(0, 0, mask);
+}
+
+/// A shadow inside of `box`: what is left of the box when its shifted and
+/// shrunk copy is taken away.
+void drawInsetShadow(QImage &target, const QRectF &box, const SpriteShadow &s)
+{
+    QImage mask = transparentImage(target.size());
+    {
+        QPainter painter(&mask);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(toQColor(s.rgba));
+        painter.drawRect(box);
+
+        const QRectF hole = box.translated(s.x, s.y)
+                                .adjusted(s.spread, s.spread, -s.spread,
+                                          -s.spread);
+        if (hole.width() > 0 && hole.height() > 0)
+        {
+            painter.setCompositionMode(
+                QPainter::CompositionMode_DestinationOut);
+            painter.setBrush(Qt::black);
+            painter.drawRect(hole);
+        }
+    }
+    blurImage(mask, s.blur / 2.0);
+
+    // the blur spreads outwards, too: only what is inside of the box stays
+    QImage inside = transparentImage(target.size());
+    {
+        QPainter painter(&inside);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(Qt::black);
+        painter.drawRect(box);
+    }
+    {
+        QPainter painter(&mask);
+        painter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+        painter.drawImage(0, 0, inside);
+    }
+    QPainter painter(&target);
+    painter.drawImage(0, 0, mask);
+}
+
+/// Draws one overlay on `target` (which is the emote's box, or the canvas
+/// that the box is part of). Whatever sticks out of `target` is lost.
+void drawOverlay(QImage &target, const SpriteOverlay &o)
+{
+    const QSize box = target.size();
+    const QFont font = overlayFont(o);
+    const QFontMetricsF metrics(font);
+    // `metrics` is for the font at `kTextScale` times its size
+    const double lineHeight =
+        o.lineHeightPx > 0 ? o.lineHeightPx : metrics.height() / kTextScale;
+
+    QStringList lines;
+    double textWidth = 0;
+    if (!o.text.isEmpty())
+    {
+        lines = o.width ? wrapText(o.text, metrics, *o.width * kTextScale)
+                        : QStringList{o.text};
+        for (const auto &line : lines)
+        {
+            textWidth = std::max(textWidth,
+                                 metrics.horizontalAdvance(line) / kTextScale);
+        }
+    }
+    const double elementW = o.width.value_or(textWidth);
+    const double elementH =
+        o.height.value_or(static_cast<double>(lines.size()) * lineHeight);
+
+    // absolute positioning against the box; `auto` on both sides is the
+    // top-left corner
+    double x = 0;
+    double y = 0;
+    if (o.left)
+    {
+        x = *o.left;
+    }
+    else if (o.right)
+    {
+        x = box.width() - *o.right - elementW;
+    }
+    if (o.top)
+    {
+        y = *o.top;
+    }
+    else if (o.bottom)
+    {
+        y = box.height() - *o.bottom - elementH;
+    }
+
+    // The element is drawn into a layer of its own (so that the transform
+    // moves its shadows too), which has to be big enough for it wherever it
+    // lies and for the blur of its shadows
+    double reach = 2;
+    for (const auto &shadow : o.shadows)
+    {
+        reach = std::max(reach, shadow.blur * 1.5 + std::abs(shadow.spread) +
+                                    std::max(std::abs(shadow.x),
+                                             std::abs(shadow.y)) +
+                                    2);
+    }
+    reach = std::min(reach, 64.0);
+    QRectF area = QRectF(0, 0, box.width(), box.height())
+                      .united(QRectF(x - reach, y - reach, elementW + 2 * reach,
+                                     elementH + 2 * reach));
+    area = area.intersected(
+        QRectF(-256, -256, box.width() + 512, box.height() + 512));
+    const QPoint layerOrigin(static_cast<int>(std::floor(area.left())),
+                             static_cast<int>(std::floor(area.top())));
+    const QSize layerSize(
+        static_cast<int>(std::ceil(area.right())) - layerOrigin.x(),
+        static_cast<int>(std::ceil(area.bottom())) - layerOrigin.y());
+    if (layerSize.isEmpty())
+    {
+        return;
+    }
+
+    QImage layer = transparentImage(layerSize);
+    const QRectF rect(x - layerOrigin.x(), y - layerOrigin.y(), elementW,
+                      elementH);
+    for (auto it = o.shadows.rbegin(); it != o.shadows.rend(); ++it)
+    {
+        if (!it->inset)
+        {
+            drawOuterShadow(layer, rect, *it);
+        }
+    }
+    for (auto it = o.shadows.rbegin(); it != o.shadows.rend(); ++it)
+    {
+        if (it->inset)
+        {
+            drawInsetShadow(layer, rect, *it);
+        }
+    }
+    if (!lines.isEmpty())
+    {
+        QPainter painter(&layer);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        painter.setFont(font);
+        painter.setPen(toQColor(o.color));
+        // the font is `kTextScale` times too big: draw in a scaled-up space
+        painter.scale(1.0 / kTextScale, 1.0 / kTextScale);
+        for (qsizetype i = 0; i < lines.size(); i++)
+        {
+            const double baseline =
+                rect.top() + static_cast<double>(i) * lineHeight +
+                (lineHeight - metrics.height() / kTextScale) / 2.0 +
+                metrics.ascent() / kTextScale;
+            painter.drawText(QPointF(rect.left() * kTextScale,
+                                     baseline * kTextScale),
+                             lines[static_cast<qsizetype>(i)]);
+        }
+    }
+
+    if (!o.filters.empty())
+    {
+        layer = applySpriteFilters(layer, o.filters);
+    }
+
+    const double originX =
+        x + (o.originXPercent ? o.originX * elementW / 100.0 : o.originX);
+    const double originY =
+        y + (o.originYPercent ? o.originY * elementH / 100.0 : o.originY);
+    const auto &m = o.matrix;
+
+    QPainter painter(&target);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setOpacity(std::clamp(o.opacity, 0.0, 1.0));
+    // the calls act in reverse order on a point: move the origin to (0, 0),
+    // transform, move it back
+    painter.translate(originX, originY);
+    painter.setTransform(QTransform(m[0], m[1], m[2], m[3], m[4], m[5]), true);
+    painter.translate(-originX, -originY);
+    painter.drawImage(QPointF(layerOrigin), layer);
+}
+
+/// A frame with its overlays on it, on its canvas.
+QImage composeFrame(const QImage &frame, const SpriteSheetSpec &spec,
+                    const std::vector<SpriteOverlay> *overlays)
+{
+    const bool hasOverlays = overlays != nullptr && !overlays->empty();
+    if (spec.canvasSize.isEmpty() && !hasOverlays)
+    {
+        return frame;
+    }
+
+    const QSize canvasSize =
+        spec.canvasSize.isEmpty() ? frame.size() : spec.canvasSize;
+    QImage canvas = transparentImage(canvasSize);
+    {
+        QPainter painter(&canvas);
+        painter.drawImage(spec.canvasImagePos, frame);
+    }
+    if (hasOverlays)
+    {
+        QImage layer = transparentImage(canvasSize);
+        for (const auto &overlay : *overlays)
+        {
+            drawOverlay(layer, overlay);
+        }
+        if (spec.canvasMirror)
+        {
+            layer = layer.mirrored(true, false);
+        }
+        QPainter painter(&canvas);
+        painter.drawImage(0, 0, layer);
+    }
+    return canvas.convertToFormat(QImage::Format_ARGB32);
+}
+
 }  // namespace
 
 namespace chatterino {
@@ -214,7 +662,26 @@ bool SpriteSheetSpec::isValid() const
     return this->frameSize.width() > 0 && this->frameSize.height() > 0 &&
            !this->offsets.empty() &&
            this->durationsMs.size() == this->offsets.size() &&
-           (this->poses.empty() || this->poses.size() == this->offsets.size());
+           (this->poses.empty() || this->poses.size() == this->offsets.size()) &&
+           (this->overlays.empty() ||
+            this->overlays.size() == this->offsets.size());
+}
+
+QMargins SpriteSheetSpec::canvasMargins() const
+{
+    if (this->canvasSize.isEmpty())
+    {
+        return {};
+    }
+    const int left = std::max(0, this->canvasImagePos.x());
+    const int top = std::max(0, this->canvasImagePos.y());
+    const int right = std::max(0, this->canvasSize.width() -
+                                      this->canvasImagePos.x() -
+                                      this->frameSize.width());
+    const int bottom = std::max(0, this->canvasSize.height() -
+                                       this->canvasImagePos.y() -
+                                       this->frameSize.height());
+    return QMargins(left, top, right, bottom);
 }
 
 QString SpriteSheetSpec::cacheKey() const
@@ -290,6 +757,94 @@ QString SpriteSheetSpec::cacheKey() const
         addPose(this->restPose);
     }
 
+    if (this->hasOverlays() || !this->canvasSize.isEmpty())
+    {
+        const auto num = [&](double v) {
+            blob.append(QByteArray::number(v, 'g', 8));
+            blob.append(',');
+        };
+        const auto numOrNone = [&](const std::optional<double> &v) {
+            if (v)
+            {
+                num(*v);
+            }
+            else
+            {
+                blob.append("n,");
+            }
+        };
+        const auto addOverlay = [&](const SpriteOverlay &o) {
+            blob.append(o.text.toUtf8());
+            blob.append('\x1f');
+            blob.append(o.fontFamily.toUtf8());
+            blob.append('\x1f');
+            num(o.fontPx);
+            for (const auto v : o.color)
+            {
+                num(v);
+            }
+            num(o.letterSpacingPx);
+            num(o.lineHeightPx);
+            numOrNone(o.left);
+            numOrNone(o.top);
+            numOrNone(o.right);
+            numOrNone(o.bottom);
+            numOrNone(o.width);
+            numOrNone(o.height);
+            for (const auto v : o.matrix)
+            {
+                num(v);
+            }
+            num(o.originX);
+            num(o.originXPercent ? 1 : 0);
+            num(o.originY);
+            num(o.originYPercent ? 1 : 0);
+            num(o.opacity);
+            for (const auto &shadow : o.shadows)
+            {
+                blob.append(shadow.inset ? "i" : "o");
+                num(shadow.x);
+                num(shadow.y);
+                num(shadow.blur);
+                num(shadow.spread);
+                for (const auto v : shadow.rgba)
+                {
+                    num(v);
+                }
+            }
+            for (const auto &filter : o.filters)
+            {
+                blob.append('f');
+                num(static_cast<double>(filter.kind));
+                num(filter.amount);
+            }
+            blob.append(';');
+        };
+        blob.append("|O");
+        for (const auto &list : this->overlays)
+        {
+            for (const auto &overlay : list)
+            {
+                addOverlay(overlay);
+            }
+            blob.append('/');
+        }
+        blob.append('r');
+        for (const auto &overlay : this->restOverlays)
+        {
+            addOverlay(overlay);
+        }
+        blob.append('c');
+        blob.append(QByteArray::number(this->canvasSize.width()));
+        blob.append(',');
+        blob.append(QByteArray::number(this->canvasSize.height()));
+        blob.append(',');
+        blob.append(QByteArray::number(this->canvasImagePos.x()));
+        blob.append(',');
+        blob.append(QByteArray::number(this->canvasImagePos.y()));
+        blob.append(this->canvasMirror ? 'm' : 'u');
+    }
+
     // Only added when set, so the key of an ordinary (looping) animation
     // is what it always was
     if (this->loopCount > 0 || this->instanceId != 0)
@@ -332,6 +887,12 @@ QImage applySpriteFilters(const QImage &image,
             for (const auto &filter : filters)
             {
                 px = applyFilter(px, filter);
+                // every filter function of a chain clamps its result, as
+                // browsers do: without it saturate(60) overshoots by far and
+                // the next filter turns the emote plain red (COOMER)
+                px[0] = clamp01(px[0]);
+                px[1] = clamp01(px[1]);
+                px[2] = clamp01(px[2]);
             }
             line[x] = qRgba(toByte(px[0]), toByte(px[1]), toByte(px[2]),
                             toByte(px[3]));
@@ -403,8 +964,10 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
     const QImage source = sheet.convertToFormat(QImage::Format_ARGB32);
 
     size_t count = spec.offsets.size();
-    const qint64 frameBytes = static_cast<qint64>(spec.frameSize.width()) *
-                              spec.frameSize.height() * 4;
+    const QSize outSize =
+        spec.canvasSize.isEmpty() ? spec.frameSize : spec.canvasSize;
+    const qint64 frameBytes =
+        static_cast<qint64>(outSize.width()) * outSize.height() * 4;
     bool addRest = spec.playsOnce();
     if (frameBytes * static_cast<qint64>(count + (addRest ? 1 : 0)) > maxBytes)
     {
@@ -425,6 +988,8 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
         {
             frame = applySpriteFilters(frame, spec.filters);
         }
+        frame = composeFrame(
+            frame, spec, spec.overlays.empty() ? nullptr : &spec.overlays[i]);
 
         const int duration =
             count > 1 ? std::max(MIN_FRAME_DURATION_MS, spec.durationsMs[i])
@@ -447,6 +1012,9 @@ std::vector<SpriteFrame> sliceSpriteSheet(const QImage &sheet,
         {
             rest = applySpriteFilters(rest, spec.filters);
         }
+        rest = composeFrame(rest, spec,
+                            spec.overlays.empty() ? nullptr
+                                                  : &spec.restOverlays);
         out.push_back(SpriteFrame{.image = std::move(rest), .durationMs = 0});
     }
 

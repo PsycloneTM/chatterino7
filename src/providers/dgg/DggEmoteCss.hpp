@@ -183,6 +183,10 @@ struct Rule {
 
     /// Whether the rule can match differently for different users.
     bool dependsOnContext = false;
+
+    /// 0 for the emote itself, 1 for its `::before`, 2 for its `::after`.
+    int pseudo = 0;
+
     std::vector<Decl> decls;
 };
 

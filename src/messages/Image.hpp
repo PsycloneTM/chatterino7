@@ -9,6 +9,7 @@
 #include "util/DebugCount.hpp"
 
 #include <QList>
+#include <QMargins>
 #include <QPixmap>
 #include <QString>
 #include <QThread>
@@ -125,6 +126,13 @@ public:
     int height() const;
     QSizeF size() const;
     bool animated() const;
+
+    /// How far the pixmaps reach beyond the box that `width()`, `height()`
+    /// and `size()` describe, on each side and already scaled. Non-zero for
+    /// an emote whose `::before` or `::after` flies outside of it (NoTears):
+    /// the layout only gives the emote its own room, and the painter draws
+    /// the pixmap into the box grown by these margins.
+    QMarginsF canvasMargins() const;
 
     bool operator==(const Image &image) = delete;
 

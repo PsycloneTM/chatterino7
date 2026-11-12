@@ -193,6 +193,38 @@ TEST(DggMessage, ModerationTextIgnoresOtherEventsAndEmptyTargets)
         dggModerationText(u"BAN", obj(R"({"nick":"a","data":""})")).isEmpty());
 }
 
+TEST(DggMessage, ParsesCapturedDeath)
+{
+    // the dead user is `nick`, `data` is the cause
+    auto death = parseDggDeath(
+        obj(R"({"id":134457,"nick":"Cyclone","roles":[],"features":["flair1","subscriber"],"subscription":{"tier":2,"source":"destiny.gg"},"timestamp":1794438748002,"duration":600,"data":"  believed his LIES  "})"),
+        NOW);
+    ASSERT_TRUE(death.has_value());
+    EXPECT_EQ(death->user.nick, QStringLiteral("Cyclone"));
+    EXPECT_EQ(death->user.id, 134457);
+    EXPECT_EQ(death->user.subTier, 2);
+    EXPECT_EQ(death->cause, QStringLiteral("believed his LIES"));
+    EXPECT_EQ(death->durationSeconds, 600);
+    EXPECT_EQ(death->timestampMs, 1794438748002);
+}
+
+TEST(DggMessage, DeathWithoutCauseDurationOrTimestamp)
+{
+    auto death = parseDggDeath(obj(R"({"nick":"Cyclone"})"), NOW);
+    ASSERT_TRUE(death.has_value());
+    EXPECT_TRUE(death->cause.isEmpty());
+    EXPECT_EQ(death->durationSeconds, 0);
+    EXPECT_EQ(death->timestampMs, NOW);
+}
+
+TEST(DggMessage, DeathNeedsANick)
+{
+    EXPECT_FALSE(
+        parseDggDeath(obj(R"({"data":"x","duration":60})"), NOW).has_value());
+    EXPECT_FALSE(
+        parseDggDeath(obj(R"({"nick":"","data":"x"})"), NOW).has_value());
+}
+
 TEST(DggMessage, SubOnlyText)
 {
     EXPECT_EQ(dggSubOnlyText(obj(

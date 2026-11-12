@@ -3,6 +3,7 @@
 #include "providers/dgg/DggCssAnimation.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -764,7 +765,7 @@ std::optional<std::pair<int, int>> parseNth(string_view raw)
     return std::make_pair(a, b);
 }
 
-bool fillStructural(Compound &c, string &why);
+bool fillStructural(Compound &c, string &why, int *pseudoElement = nullptr);
 
 std::optional<ComplexSelector> parseComplex(string_view text, string &why)
 {
@@ -793,8 +794,10 @@ std::optional<ComplexSelector> parseComplex(string_view text, string &why)
 
 /// Parses the pseudo-classes of a compound into `structural`. Returns false
 /// (with `why` set) for one that isn't understood. `:hover` is left to the
-/// caller, a pseudo-element is an error.
-bool fillStructural(Compound &c, string &why)
+/// caller. A pseudo-element is an error unless `pseudoElement` is given: then
+/// `::before` / `:before` set it to 1 and `::after` / `:after` to 2 (and are
+/// not otherwise looked at).
+bool fillStructural(Compound &c, string &why, int *pseudoElement)
 {
     using Kind = PseudoClass::Kind;
 
@@ -808,6 +811,19 @@ bool fillStructural(Compound &c, string &why)
         if (startsWith(pseudo, "::") || pseudo == ":before" ||
             pseudo == ":after")
         {
+            const string lowered = toLower(pseudo);
+            if (pseudoElement != nullptr &&
+                (lowered == "::before" || lowered == ":before"))
+            {
+                *pseudoElement = 1;
+                continue;
+            }
+            if (pseudoElement != nullptr &&
+                (lowered == "::after" || lowered == ":after"))
+            {
+                *pseudoElement = 2;
+                continue;
+            }
             why = "pseudo-element";
             return false;
         }
@@ -952,6 +968,8 @@ struct Analysis {
     int specificity = 0;
     bool hover = false;
     bool dependsOnContext = false;
+    /// 0 for the emote itself, 1 for its `::before`, 2 for its `::after`.
+    int pseudo = 0;
 };
 
 /// Checks that a selector has the shape DGG's per-emote rules have, and
@@ -1005,13 +1023,25 @@ Analysis analyseSelector(string_view selector)
     }
     out.emote = subjectEmote;
 
-    for (auto &part : out.parts)
+    for (size_t partIndex = 0; partIndex < out.parts.size(); partIndex++)
     {
+        auto &part = out.parts[partIndex];
         string why;
-        if (!fillStructural(part.compound, why))
+        int pseudoElement = 0;
+        if (!fillStructural(part.compound, why, &pseudoElement))
         {
             out.rejected = why;
             return out;
+        }
+        if (pseudoElement != 0)
+        {
+            if (partIndex + 1 != out.parts.size())
+            {
+                // `.emote::before + .x` and the like never match anything
+                out.rejected = "pseudo-element";
+                return out;
+            }
+            out.pseudo = pseudoElement;
         }
         for (const auto &pseudo : part.compound.pseudos)
         {
@@ -1789,13 +1819,26 @@ void setProperty(Props &props, const string &name, const string &value)
         // the whole list, for the baking of transform/filter animations (the
         // expanded properties only keep the first animation)
         props["animation-raw"] = value;
+        // the shorthand resets the delay a longhand set before it
+        props.erase("animation-delay-override");
         return;
     }
-    if (name.rfind("animation-", 0) == 0 && name != "animation-raw")
+    if (name == "animation-delay" && props.count("animation-raw") != 0)
+    {
+        // `animation: GSN-anim 1s 1; animation-delay: 0.25s;` keeps the list
+        // and only changes when each animation starts, which is applied to
+        // the parsed list (see parseAnimationsOf())
+        props["animation-delay-override"] = value;
+        props[name] = value;
+        return;
+    }
+    if (name.rfind("animation-", 0) == 0 && name != "animation-raw" &&
+        name != "animation-delay-override")
     {
         // a longhand changes what the shorthand said, so the raw list is no
         // longer what applies
         props.erase("animation-raw");
+        props.erase("animation-delay-override");
     }
 
     if (name == "background-position")
@@ -2201,6 +2244,47 @@ std::optional<string> backgroundPositionAsTranslate(string_view value,
 /// animation of its own; the two aren't combined.
 ///
 /// Leaves `style` alone (adding a note) if the animations can't be baked.
+/// Properties that only mean something for the box of a `::before` /
+/// `::after` (applyPseudoElements()). The poses of an emote can't show them.
+constexpr std::array<anim::Prop, 11> BOX_PROPS{
+    anim::Prop::Left,          anim::Prop::Right,
+    anim::Prop::Top,           anim::Prop::Bottom,
+    anim::Prop::Width,         anim::Prop::Height,
+    anim::Prop::FontSize,      anim::Prop::LineHeight,
+    anim::Prop::LetterSpacing, anim::Prop::ContentText,
+    anim::Prop::BoxShadow,
+};
+
+/// `anim::parseAnimationList()` plus the `animation-delay` longhand that
+/// followed the shorthand in the same rule (it applies to every animation of
+/// the list)
+std::optional<std::vector<anim::AnimationSpec>> parseAnimationsOf(
+    const Props &props, const string &rawList)
+{
+    auto specs = anim::parseAnimationList(rawList);
+    if (!specs)
+    {
+        return specs;
+    }
+    const auto it = props.find("animation-delay-override");
+    if (it != props.end())
+    {
+        const auto resolved = resolveVars(it->second, props);
+        const string text = resolved ? *resolved : it->second;
+        const auto entries = splitTopLevel(text, ',');
+        for (size_t i = 0; !entries.empty() && i < specs->size(); i++)
+        {
+            // a short list repeats
+            const auto entry = trimView(entries[i % entries.size()]);
+            if (const auto ms = parseTimeMs(entry))
+            {
+                (*specs)[i].delayMs = *ms;
+            }
+        }
+    }
+    return specs;
+}
+
 void bakeAnimations(const Props &props, const Keyframes &keyframes,
                     DggEmoteStyle &style, QSize sheetSize,
                     std::vector<string> &notes)
@@ -2215,7 +2299,7 @@ void bakeAnimations(const Props &props, const Keyframes &keyframes,
     {
         return;
     }
-    const auto specs = anim::parseAnimationList(*rawList);
+    const auto specs = parseAnimationsOf(props, *rawList);
     if (!specs)
     {
         notes.push_back("animation (not understood): " + *rawList);
@@ -2290,6 +2374,15 @@ void bakeAnimations(const Props &props, const Keyframes &keyframes,
             {
                 notes.push_back("animation " + spec.name + ": " + problem);
             }
+            continue;
+        }
+        if (std::any_of(BOX_PROPS.begin(), BOX_PROPS.end(),
+                        [&](anim::Prop prop) { return built->animates(prop); }))
+        {
+            // (`left` of GIGASIP, `width` of NoTears: the emote's box moves,
+            // which the picture can't show)
+            notes.push_back("animation " + spec.name +
+                            ": keyframe property of the box (left, width, ...)");
             continue;
         }
         animations.push_back(std::move(*built));
@@ -2846,6 +2939,522 @@ DggEmoteStyle computeStyle(const Props &props, const Keyframes &keyframes,
     return style;
 }
 
+// ---------------------------------------------------------------------------
+// `::before` and `::after`
+// ---------------------------------------------------------------------------
+
+std::optional<double> lengthPx(const anim::LenOrAuto &value, double reference)
+{
+    if (value.isAuto)
+    {
+        return std::nullopt;
+    }
+    return value.len.percent ? value.len.value * reference / 100.0
+                             : value.len.value;
+}
+
+/// What a pseudo-element looks like when nothing animates.
+anim::Computed pseudoBase(const Props &props)
+{
+    anim::Computed base;
+    for (const char *name :
+         {"left", "right", "top", "bottom", "width", "height", "font-size",
+          "line-height", "letter-spacing", "content", "box-shadow", "opacity",
+          "transform", "translate", "rotate", "scale", "transform-origin",
+          "filter"})
+    {
+        const auto it = props.find(name);
+        if (it == props.end())
+        {
+            continue;
+        }
+        auto resolved = resolveVars(it->second, props);
+        if (!resolved)
+        {
+            continue;
+        }
+        if (string_view(name) == "filter")
+        {
+            resolved = withoutDropShadows(*resolved);
+        }
+        if (auto parsed = anim::parseDeclaration(name, *resolved))
+        {
+            anim::setProp(base, parsed->first, std::move(parsed->second));
+        }
+    }
+    return base;
+}
+
+/// The animations of `animation` (the whole list) that can be built.
+std::vector<anim::Animation> pseudoAnimations(const Props &props,
+                                              const Keyframes &keyframes,
+                                              std::vector<string> &notes)
+{
+    std::vector<anim::Animation> out;
+    const auto rawIt = props.find("animation-raw");
+    if (rawIt == props.end())
+    {
+        return out;
+    }
+    const auto rawList = resolveVars(rawIt->second, props);
+    if (!rawList || trimView(*rawList) == "none")
+    {
+        return out;
+    }
+    const auto specs = parseAnimationsOf(props, *rawList);
+    if (!specs)
+    {
+        notes.push_back("pseudo-element animation (not understood): " +
+                        *rawList);
+        return out;
+    }
+    for (const auto &spec : *specs)
+    {
+        if (spec.name.empty() || spec.name == "none")
+        {
+            continue;
+        }
+        const auto found = keyframes.find(spec.name);
+        if (found == keyframes.end())
+        {
+            notes.push_back("pseudo-element animation " + spec.name +
+                            ": no @keyframes");
+            continue;
+        }
+        std::vector<anim::Keyframe> frames;
+        for (const auto &stop : found->second)
+        {
+            anim::Keyframe frame;
+            frame.offset = stop.percent / 100.0;
+            for (const auto &decl : stop.decls)
+            {
+                const auto value = resolveVars(decl.value, props);
+                frame.decls.push_back(anim::KeyframeDecl{
+                    decl.name, value ? *value : decl.value});
+            }
+            frames.push_back(std::move(frame));
+        }
+        string problem;
+        auto built = anim::Animation::build(spec, frames, problem);
+        if (!built)
+        {
+            notes.push_back("pseudo-element animation " + spec.name + ": " +
+                            problem);
+            continue;
+        }
+        out.push_back(std::move(*built));
+    }
+    return out;
+}
+
+/// What chat-gui does to the box of an emote while keyframes that never
+/// change set its `width`, `margin-*` and `background-position`: NoTears
+/// makes its box 69px wide to have room for the banana that flies around
+/// next to it, and moves the picture inside so that it stays where it was.
+struct BoxAnimation {
+    /// 0 if not set
+    double width = 0;
+    /// `background-position` (x)
+    double imageX = 0;
+    /// Every animation that is only about the box (or `z-index`), so that
+    /// the notes about them can go.
+    std::vector<string> names;
+    bool any = false;
+};
+
+BoxAnimation boxAnimationOf(const Props &emote, const Keyframes &keyframes)
+{
+    BoxAnimation out;
+    const auto rawIt = emote.find("animation-raw");
+    if (rawIt == emote.end())
+    {
+        return out;
+    }
+    const auto rawList = resolveVars(rawIt->second, emote);
+    if (!rawList)
+    {
+        return out;
+    }
+    const auto specs = parseAnimationsOf(emote, *rawList);
+    if (!specs)
+    {
+        return out;
+    }
+
+    for (const auto &spec : *specs)
+    {
+        const auto found = keyframes.find(spec.name);
+        if (found == keyframes.end() || found->second.empty())
+        {
+            continue;
+        }
+
+        std::map<string, string> values;
+        bool constant = true;
+        bool onlyBox = true;
+        for (const auto &stop : found->second)
+        {
+            for (const auto &decl : stop.decls)
+            {
+                const string name = toLower(decl.name);
+                if (name == "z-index" || name == "animation-timing-function")
+                {
+                    continue;
+                }
+                if (name != "width" && name != "margin-left" &&
+                    name != "margin-right" && name != "background-position")
+                {
+                    onlyBox = false;
+                    continue;
+                }
+                const auto value = resolveVars(decl.value, emote);
+                const string text = value ? *value : decl.value;
+                const auto [it, inserted] = values.emplace(name, text);
+                if (!inserted && it->second != text)
+                {
+                    constant = false;
+                }
+            }
+        }
+        // a property that only some stops have moves from / to the value the
+        // element has by itself
+        for (const auto &stop : found->second)
+        {
+            for (const auto &[name, text] : values)
+            {
+                const bool has = std::any_of(
+                    stop.decls.begin(), stop.decls.end(),
+                    [&](const Decl &d) { return toLower(d.name) == name; });
+                if (!has)
+                {
+                    constant = false;
+                }
+            }
+        }
+        if (!onlyBox)
+        {
+            continue;
+        }
+        out.names.push_back(spec.name);
+        if (values.empty() || !constant)
+        {
+            continue;
+        }
+
+        out.any = true;
+        if (const auto w = values.find("width"); w != values.end())
+        {
+            if (const auto px = parseLengthPx(w->second))
+            {
+                out.width = *px;
+            }
+        }
+        if (const auto bg = values.find("background-position");
+            bg != values.end())
+        {
+            const auto tokens = splitWhitespace(bg->second);
+            if (!tokens.empty())
+            {
+                if (const auto px = parseLengthPx(tokens[0]))
+                {
+                    out.imageX = *px;
+                }
+            }
+        }
+    }
+    return out;
+}
+
+SpriteOverlay overlayOf(const Props &props, const anim::Computed &state,
+                        const anim::Box &box)
+{
+    SpriteOverlay o;
+    o.text = state.content.none ? QString()
+                                : QString::fromStdString(state.content.text);
+    o.fontPx = state.fontSize;
+    if (const auto it = props.find("font-family"); it != props.end())
+    {
+        o.fontFamily = QString::fromStdString(it->second);
+    }
+    if (const auto it = props.find("color"); it != props.end())
+    {
+        if (const auto resolved = resolveVars(it->second, props))
+        {
+            if (const auto color = anim::parseColorValue(*resolved))
+            {
+                o.color = *color;
+            }
+        }
+    }
+    o.letterSpacingPx = state.letterSpacing;
+    if (!state.lineHeight.isAuto)
+    {
+        o.lineHeightPx = state.lineHeight.len.percent
+                             ? state.lineHeight.len.value * state.fontSize /
+                                   100.0
+                             : state.lineHeight.len.value;
+    }
+    o.left = lengthPx(state.left, box.width);
+    o.top = lengthPx(state.top, box.height);
+    o.right = lengthPx(state.right, box.width);
+    o.bottom = lengthPx(state.bottom, box.height);
+    o.width = lengthPx(state.width, box.width);
+    o.height = lengthPx(state.height, box.height);
+
+    const auto m = anim::matrixWithoutOrigin(state, box);
+    o.matrix = {m.a, m.b, m.c, m.d, m.e, m.f};
+    o.originX = state.origin.x.value;
+    o.originXPercent = state.origin.x.percent;
+    o.originY = state.origin.y.value;
+    o.originYPercent = state.origin.y.percent;
+    o.opacity = state.opacity;
+    for (const auto &fn : state.filter)
+    {
+        o.filters.push_back(SpriteColorFilter{
+            .kind = static_cast<SpriteColorFilter::Kind>(fn.kind),
+            .amount = fn.amount,
+        });
+    }
+    for (const auto &shadow : state.boxShadow)
+    {
+        o.shadows.push_back(SpriteShadow{
+            .inset = shadow.inset,
+            .x = shadow.x,
+            .y = shadow.y,
+            .blur = shadow.blur,
+            .spread = shadow.spread,
+            .rgba = shadow.rgba,
+        });
+    }
+    return o;
+}
+
+/// A box that certainly shows nothing: transparent, empty, or parked above
+/// the emote (NoTears' banana waits at `top: -34px`).
+bool overlayHidden(const SpriteOverlay &o, const anim::Box &box)
+{
+    if (o.opacity <= 0)
+    {
+        return true;
+    }
+    if (o.text.isEmpty() && o.shadows.empty())
+    {
+        return true;
+    }
+    if (o.top && !o.bottom && o.shadows.empty())
+    {
+        const double height =
+            o.height.value_or(o.lineHeightPx > 0 ? o.lineHeightPx
+                                                 : o.fontPx * 1.3);
+        if (*o.top + height <= 0 || *o.top >= box.height)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Draws the `::before` and `::after` of an emote (GSN's dolphins, NoTears'
+/// banana, HACKERMAN's scan line and digits) on top of its frames, as
+/// `SpriteSheetSpec::overlays`. Both are laid out in the emote's box, run on
+/// one clock, and are cut off at its edge. Leaves `style` alone (adding a
+/// note) if they can't be drawn.
+///
+/// Not combined with an emote that has a sprite or pose animation of its
+/// own; a plain `scale(-1, 1)` is fine.
+void applyPseudoElements(const Props &emote, const Props *beforeProps,
+                         const Props *afterProps, const Keyframes &keyframes,
+                         DggEmoteStyle &style)
+{
+    if (!style.valid)
+    {
+        return;
+    }
+    std::vector<string> notes;
+    auto &sprite = style.sprite;
+
+    const double frameW = style.frameSize.width();
+    const double frameH = style.frameSize.height();
+
+    const auto boxAnimation = boxAnimationOf(emote, keyframes);
+    const bool widened = boxAnimation.any && boxAnimation.width > frameW + 0.5;
+    const double boxW = widened ? boxAnimation.width : frameW;
+    const anim::Box box{.width = boxW, .height = frameH};
+
+    struct Layer {
+        const Props *props;
+        anim::Computed base;
+    };
+    std::vector<Layer> layers;
+    std::vector<anim::LayerInput> inputs;
+    for (const Props *props : {beforeProps, afterProps})
+    {
+        if (props == nullptr)
+        {
+            continue;
+        }
+        const auto position = props->find("position");
+        const auto display = props->find("display");
+        if (display != props->end() && trimView(display->second) == "none")
+        {
+            continue;
+        }
+        auto base = pseudoBase(*props);
+        if (base.content.none)
+        {
+            continue;  // no content, no box
+        }
+        if (position == props->end() || trimView(position->second) != "absolute")
+        {
+            notes.emplace_back("pseudo-element that isn't position: absolute");
+            continue;
+        }
+        if (const auto blend = props->find("mix-blend-mode");
+            blend != props->end() && trimView(blend->second) != "normal")
+        {
+            notes.emplace_back("pseudo-element mix-blend-mode");
+        }
+        auto animations = pseudoAnimations(*props, keyframes, notes);
+        inputs.push_back(anim::LayerInput{std::move(animations), base});
+        layers.push_back(Layer{props, std::move(base)});
+    }
+
+    // the emote's own animations that were only about the box aren't news
+    for (const auto &name : boxAnimation.names)
+    {
+        style.notes.removeIf([&](const QString &note) {
+            return note.startsWith(
+                QStringLiteral("animation %1:").arg(QString::fromStdString(name)));
+        });
+    }
+
+    if (layers.empty())
+    {
+        for (const auto &note : notes)
+        {
+            style.notes.append(QString::fromStdString(note));
+        }
+        return;
+    }
+
+    if (sprite.offsets.size() != 1 ||
+        (sprite.hasPoses() &&
+         !std::all_of(sprite.poses.begin(), sprite.poses.end(),
+                      [&](const SpritePose &pose) {
+                          return pose == sprite.poses.front();
+                      })))
+    {
+        style.notes.append(QStringLiteral(
+            "pseudo-elements not drawn: the emote is animated itself"));
+        return;
+    }
+
+    const auto overlaysOf = [&](const std::vector<anim::Computed> &states) {
+        std::vector<SpriteOverlay> list;
+        for (size_t i = 0; i < states.size(); i++)
+        {
+            if (states[i].content.none)
+            {
+                continue;
+            }
+            auto overlay = overlayOf(*layers[i].props, states[i], box);
+            if (!overlayHidden(overlay, box))
+            {
+                list.push_back(std::move(overlay));
+            }
+        }
+        return list;
+    };
+
+    const QPoint offset = sprite.offsets.front();
+    const SpritePose pose = sprite.hasPoses() ? sprite.poses.front() : SpritePose{};
+
+    string problem;
+    const auto baked = anim::bakeLayers(inputs, box, anim::BakeOptions{}, problem);
+    if (baked)
+    {
+        auto frames = baked->frames;
+        if (frames.size() == 1)
+        {
+            // what makes a limited animation one
+            frames.push_back(frames.front());
+        }
+        sprite.offsets.assign(frames.size(), offset);
+        sprite.durationsMs.clear();
+        sprite.overlays.clear();
+        for (const auto &frame : frames)
+        {
+            sprite.durationsMs.push_back(frame.durationMs);
+            sprite.overlays.push_back(overlaysOf(frame.layers));
+        }
+        sprite.restOverlays = overlaysOf(baked->rest);
+        sprite.loopCount = 1;
+        sprite.restOffset = offset;
+        if (sprite.hasPoses())
+        {
+            sprite.poses.assign(frames.size(), pose);
+            sprite.restPose = pose;
+        }
+        if (baked->truncated)
+        {
+            notes.emplace_back("pseudo-element animation: cut off after 10 s");
+        }
+    }
+    else if (problem == "no duration" || problem == "nothing changes")
+    {
+        // nothing moves: one picture
+        std::vector<anim::Computed> states;
+        for (const auto &input : inputs)
+        {
+            states.push_back(
+                anim::computeAt(input.animations, input.base, 0, box));
+        }
+        sprite.overlays.assign(1, overlaysOf(states));
+    }
+    else
+    {
+        notes.push_back("pseudo-element animation: " + problem);
+    }
+
+    if (sprite.hasOverlays())
+    {
+        // `transform: scale(-1, 1)` on the emote flips its pseudo-elements
+        // and the box they live in as well
+        bool mirrored = false;
+        if (const auto it = emote.find("transform"); it != emote.end())
+        {
+            if (const auto resolved = resolveVars(it->second, emote))
+            {
+                if (auto parsed = anim::parseDeclaration(
+                        "transform", withoutTranslations(*resolved)))
+                {
+                    anim::Computed c;
+                    anim::setProp(c, parsed->first, std::move(parsed->second));
+                    const auto m = anim::matrixWithoutOrigin(
+                        c, anim::Box{.width = frameW, .height = frameH});
+                    mirrored = m.a < 0 && m.d > 0;
+                }
+            }
+        }
+        sprite.canvasMirror = mirrored;
+        if (widened)
+        {
+            const int canvasW = static_cast<int>(std::lround(boxW));
+            const int imageX = static_cast<int>(std::lround(boxAnimation.imageX));
+            sprite.canvasSize = QSize(canvasW, style.frameSize.height());
+            sprite.canvasImagePos =
+                QPoint(mirrored ? canvasW - imageX - style.frameSize.width()
+                                : imageX,
+                       0);
+        }
+    }
+
+    for (const auto &note : notes)
+    {
+        style.notes.append(QString::fromStdString(note));
+    }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -2956,6 +3565,7 @@ DggEmoteCss DggEmoteCss::parse(const QString &css)
             rule.specificity = analysis.specificity;
             rule.order = ++order;
             rule.dependsOnContext = analysis.dependsOnContext;
+            rule.pseudo = analysis.pseudo;
             rule.decls = decls;
             out.rules_[analysis.emote].push_back(std::move(rule));
             out.stats_.rules++;
@@ -3044,6 +3654,10 @@ DggEmoteStyle DggEmoteCss::resolve(const QString &emote,
     {
         for (const auto *rule : matched)
         {
+            if (rule->pseudo != 0)
+            {
+                continue;
+            }
             for (const auto &decl : rule->decls)
             {
                 if (decl.important == important)
@@ -3054,7 +3668,49 @@ DggEmoteStyle DggEmoteCss::resolve(const QString &emote,
         }
     }
 
-    return computeStyle(props, this->keyframes_, sheetSize);
+    // `::before` and `::after`: their own properties, but custom properties
+    // are inherited (NoTears' `--t-NoTears` is set on the emote and used by
+    // its `::before`)
+    std::array<Props, 2> pseudoProps;
+    std::array<bool, 2> hasPseudo{false, false};
+    for (const bool important : {false, true})
+    {
+        for (const auto *rule : matched)
+        {
+            if (rule->pseudo == 0)
+            {
+                continue;
+            }
+            const auto index = static_cast<size_t>(rule->pseudo - 1);
+            if (!hasPseudo[index])
+            {
+                hasPseudo[index] = true;
+                for (const auto &[key, value] : props)
+                {
+                    if (key.rfind("--", 0) == 0)
+                    {
+                        pseudoProps[index][key] = value;
+                    }
+                }
+            }
+            for (const auto &decl : rule->decls)
+            {
+                if (decl.important == important)
+                {
+                    setProperty(pseudoProps[index], decl.name, decl.value);
+                }
+            }
+        }
+    }
+
+    auto style = computeStyle(props, this->keyframes_, sheetSize);
+    if (style.valid && (hasPseudo[0] || hasPseudo[1]))
+    {
+        applyPseudoElements(props, hasPseudo[0] ? &pseudoProps[0] : nullptr,
+                            hasPseudo[1] ? &pseudoProps[1] : nullptr,
+                            this->keyframes_, style);
+    }
+    return style;
 }
 
 }  // namespace chatterino

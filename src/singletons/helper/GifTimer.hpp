@@ -5,6 +5,7 @@
 #pragma once
 
 #include <pajlada/signals/signal.hpp>
+#include <QElapsedTimer>
 #include <QTimer>
 
 namespace chatterino {
@@ -35,6 +36,8 @@ public:
 
 private:
     QTimer timer;
+    QElapsedTimer wall_;
+    qint64 lastWall_ = 0;
     long unsigned position_{};
     size_t openOverlayWindows_ = 0;
 };

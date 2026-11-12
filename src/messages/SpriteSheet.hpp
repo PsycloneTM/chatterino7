@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QImage>
+#include <QMargins>
 #include <QPoint>
 #include <QtGlobal>
 #include <QSize>
@@ -68,6 +69,64 @@ struct SpritePose {
     bool operator==(const SpritePose &) const = default;
 };
 
+/// One `box-shadow` of an overlay.
+struct SpriteShadow {
+    bool inset = false;
+    double x = 0;
+    double y = 0;
+    double blur = 0;
+    double spread = 0;
+    /// r, g, b in 0..255, alpha in 0..1
+    std::array<double, 4> rgba{0, 0, 0, 1};
+
+    bool operator==(const SpriteShadow &) const = default;
+};
+
+/// What the CSS `::before` or `::after` of an emote looks like at one moment:
+/// an absolutely positioned box with some text in it (an emoji, a line of
+/// green digits) and maybe shadows, drawn on top of the emote and cut off at
+/// the edge of the emote's box (chat-gui's `.emote` has `overflow: hidden`).
+/// All lengths are in px and already resolved against the emote's box, see
+/// providers/dgg/DggEmoteCss.cpp. Drawn by `sliceSpriteSheet()`.
+struct SpriteOverlay {
+    /// Empty if the box only has shadows.
+    QString text;
+    double fontPx = 16;
+    /// A CSS `font-family` list; empty for the default font.
+    QString fontFamily;
+    /// r, g, b in 0..255, alpha in 0..1
+    std::array<double, 4> color{255, 255, 255, 1};
+    double letterSpacingPx = 0;
+    /// 0 is `normal`
+    double lineHeightPx = 0;
+
+    /// Distances from the edges of the emote's box; the missing ones are
+    /// `auto`.
+    std::optional<double> left;
+    std::optional<double> top;
+    std::optional<double> right;
+    std::optional<double> bottom;
+    /// The size of the box; text without a width is as wide as it is long.
+    std::optional<double> width;
+    std::optional<double> height;
+
+    /// CSS `matrix(a, b, c, d, e, f)` of the box's transform, *without* the
+    /// transform origin.
+    std::array<double, 6> matrix{1, 0, 0, 1, 0, 0};
+    double originX = 50;
+    bool originXPercent = true;
+    double originY = 50;
+    bool originYPercent = true;
+
+    double opacity = 1;
+    std::vector<SpriteShadow> shadows;
+    /// The box's CSS `filter` (without drop-shadow()), run over the box and
+    /// its shadows before they are transformed.
+    std::vector<SpriteColorFilter> filters;
+
+    bool operator==(const SpriteOverlay &) const = default;
+};
+
 /// Describes which parts of a (sprite) sheet are shown, in which order and
 /// for how long. This is what a CSS rule like
 ///
@@ -118,6 +177,37 @@ struct SpriteSheetSpec {
     /// What the animation rests on after `loopCount` plays, like
     /// `restOffset` for the sheet. Only used if `poses` is set.
     SpritePose restPose;
+
+    /// Things drawn on top of each frame (the emote's `::before` and
+    /// `::after`): one list for every entry of `offsets`, or none at all.
+    /// Together with `offsets` the frames are the same animation as
+    /// `poses`, only with more to draw.
+    std::vector<std::vector<SpriteOverlay>> overlays;
+
+    /// What is drawn on top of the frame the animation rests on. Only used
+    /// if `overlays` is set and the animation `playsOnce()`.
+    std::vector<SpriteOverlay> restOverlays;
+
+    /// A canvas that is bigger than the emote. chat-gui widens the box of an
+    /// emote while its `::before` flies around (NoTears), and that box is
+    /// as far as the overlay reaches. Empty: the canvas is the frame.
+    QSize canvasSize;
+
+    /// Where the (posed) frame sits on the canvas.
+    QPoint canvasImagePos;
+
+    /// The emote is mirrored as a whole (`transform: scale(-1, 1)`): the
+    /// overlays are laid out unmirrored and then flipped over the canvas.
+    bool canvasMirror = false;
+
+    bool hasOverlays() const
+    {
+        return !this->overlays.empty() || !this->restOverlays.empty();
+    }
+
+    /// How far the canvas reaches beyond the frame on each side (all zero
+    /// if there is no canvas). The layout only gives the frame room.
+    QMargins canvasMargins() const;
 
     /// Only used to keep specs apart that are otherwise equal. An animation
     /// that plays once starts when its image is loaded, so every message

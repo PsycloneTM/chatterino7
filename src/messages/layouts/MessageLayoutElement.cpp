@@ -173,6 +173,20 @@ size_t ImageLayoutElement::getSelectionIndexCount() const
     return this->trailingSpace ? 2 : 1;
 }
 
+namespace {
+
+/// The rect an emote's pixmap is drawn into: the element's own rect, grown by
+/// the margins of the image's canvas (NoTears' banana flies outside of the
+/// emote's box). Without a canvas this is `rect`.
+QRectF pixmapRectOf(const Image &image, const QRectF &rect)
+{
+    const auto margins = image.canvasMargins();
+    return rect.adjusted(-margins.left(), -margins.top(), margins.right(),
+                         margins.bottom());
+}
+
+}  // namespace
+
 void ImageLayoutElement::paint(QPainter &painter,
                                const MessageColors & /*messageColors*/)
 {
@@ -185,7 +199,9 @@ void ImageLayoutElement::paint(QPainter &painter,
     if (pixmap && !this->image_->animated())
     {
         // fourtf: make it use qreal values
-        painter.drawPixmap(QRectF(this->getRect()), *pixmap, QRectF());
+        painter.drawPixmap(
+            pixmapRectOf(*this->image_, QRectF(this->getRect())), *pixmap,
+            QRectF());
     }
 }
 
@@ -209,7 +225,8 @@ bool ImageLayoutElement::paintAnimated(QPainter &painter, qreal yOffset)
                 painter.save();
                 painter.setRenderHint(QPainter::SmoothPixmapTransform);
             }
-            painter.drawPixmap(QRectF(rect), *pixmap, QRectF());
+            painter.drawPixmap(pixmapRectOf(*this->image_, QRectF(rect)),
+                               *pixmap, QRectF());
             if (smooth)
             {
                 painter.restore();

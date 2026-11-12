@@ -195,6 +195,31 @@ void DggChatServer::handleFrame(const DggFrame &frame)
                 frame.backlog, true),
             MessageContext::Original);
     }
+    else if (name == "DEATH"_L1)
+    {
+        // The dead user is the event's own user (`data` is the cause), and
+        // they're silenced for `duration` seconds like with a mute.
+        const auto death = parseDggDeath(obj, nowMs);
+        if (!death)
+        {
+            return;
+        }
+
+        const auto key = u"DEATH|%1|%2|%3"_s.arg(
+            QString::number(death->timestampMs), death->user.nick,
+            death->cause);
+        if (!chan->markSeen(key))
+        {
+            return;
+        }
+
+        // Grey out their earlier messages, like for a mute
+        chan->disableMessagesFrom(death->user.nick);
+
+        chan->addMessage(DggMessageBuilder::makeDeathMessage(
+                             chan.get(), *death, frame.backlog, *this->assets_),
+                         MessageContext::Original);
+    }
     else if (name == "BROADCAST"_L1)
     {
         const auto text = obj.value("data"_L1).toString();

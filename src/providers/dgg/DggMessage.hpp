@@ -71,6 +71,26 @@ struct DggChatMessage {
     QDateTime time() const;
 };
 
+/// A `DEATH` event. Unlike `MUTE` and `BAN`, the user fields are those of the
+/// user who died, and `data` is the cause (free text, may contain emotes).
+struct DggDeath {
+    DggUser user;
+
+    /// What the site shows after the nick, e.g. `engaged in dishonorable PVP.`
+    QString cause;
+
+    /// How long the user is silenced for. 0 if the event has no duration.
+    qint64 durationSeconds = 0;
+
+    /// Unix time in milliseconds.
+    qint64 timestampMs = 0;
+
+    QDateTime time() const;
+};
+
+/// Parses a `DEATH` payload. Returns nullopt if it has no nick.
+std::optional<DggDeath> parseDggDeath(const QJsonObject &obj, qint64 nowMs);
+
 /// `md5(timestampMs + userId + text)` as lowercase hex, the same recipe
 /// chat-gui uses to identify a message (and the server uses to name a
 /// spotlighted one). A user id of 0 (unknown) counts as empty.

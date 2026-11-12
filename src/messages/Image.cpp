@@ -139,8 +139,10 @@ struct Frames::CachedFrames : Storage {
             return;
         }
 
-        this->gifTimerConnection = timer->signal.connect([this] {
-            this->advance();
+        this->clock = timer;
+        this->lastPosition = timer->position();
+        this->gifTimerConnection = timer->signal.connect([this, timer] {
+            this->advance(timer->position());
         });
 
         if (this->oneShot || this->loopFrom >= 0)
@@ -168,10 +170,68 @@ struct Frames::CachedFrames : Storage {
         this->processOffset();
     }
 
-    void advance()
+    void advance(unsigned long position)
     {
-        this->durationOffset += GIF_FRAME_LENGTH;
+        // The clock follows wall time and can jump by more than one tick
+        // when the GUI thread was busy: advance by what really passed.
+        const auto delta = position >= this->lastPosition
+                               ? position - this->lastPosition
+                               : GIF_FRAME_LENGTH;
+        this->lastPosition = position;
+        if (!this->oneShot && this->loopFrom < 0)
+        {
+            // an endless loop: read the phase off the clock every time, so
+            // no rounding or paused time can ever add up
+            qint64 total = 0;
+            for (const auto &frame : this->items)
+            {
+                total += frame.duration;
+            }
+            if (total > 0)
+            {
+                this->index = 0;
+                this->durationOffset = static_cast<int>(position % total);
+                this->processOffset();
+                return;
+            }
+        }
+        // A one-shot (or an intro) must not run while nobody ticks the
+        // animation: the clock never pauses, so after a pause (window not
+        // focused, a stalled GUI thread) `delta` is huge and the whole thing
+        // would be over before it was seen. Cap what a tick can add.
+        this->durationOffset +=
+            static_cast<int>(std::min<unsigned long>(delta, 100UL));
         this->processOffset();
+    }
+
+    /// Re-enters the endless part (`from` on) at the phase of the shared
+    /// clock, so it stays in step with every other copy of the image.
+    void enterLoop(qsizetype from)
+    {
+        this->index = from;
+        if (this->clock == nullptr)
+        {
+            return;
+        }
+        qint64 total = 0;
+        for (auto i = from; i < this->items.size(); i++)
+        {
+            total += this->items.at(i).duration;
+        }
+        if (total <= 0)
+        {
+            return;
+        }
+        auto phase = static_cast<qint64>(this->clock->position() % total);
+        auto i = from;
+        while (i + 1 < this->items.size() &&
+               phase > this->items.at(i).duration)
+        {
+            phase -= this->items.at(i).duration;
+            i++;
+        }
+        this->index = i;
+        this->durationOffset = static_cast<int>(phase);
     }
 
     void processOffset()
@@ -212,7 +272,7 @@ struct Frames::CachedFrames : Storage {
                 this->index++;
                 if (this->index >= size)
                 {
-                    this->index = from;
+                    this->enterLoop(from);
                 }
             }
             return;
@@ -254,6 +314,8 @@ struct Frames::CachedFrames : Storage {
     QList<Frame> items;
     QList<Frame>::size_type index{0};
     int durationOffset{0};
+    GIFTimer *clock{nullptr};
+    unsigned long lastPosition{0};
 
     /// Plays once and stays on the last frame
     bool oneShot = false;
@@ -738,7 +800,9 @@ int Image::width() const
 
     if (auto size = this->frames_->frameSize())
     {
-        return static_cast<int>(size->width() * this->scale_);
+        const auto margins = this->canvasMargins();
+        return static_cast<int>(size->width() * this->scale_ -
+                                margins.left() - margins.right());
     }
 
     // No frames loaded, use the expected size
@@ -756,7 +820,9 @@ int Image::height() const
 
     if (auto size = this->frames_->frameSize())
     {
-        return static_cast<int>(size->height() * this->scale_);
+        const auto margins = this->canvasMargins();
+        return static_cast<int>(size->height() * this->scale_ -
+                                margins.top() - margins.bottom());
     }
 
     // No frames loaded, use the expected size
@@ -774,11 +840,34 @@ QSizeF Image::size() const
 
     if (auto size = this->frames_->frameSize())
     {
-        return size->toSizeF() * this->scale_;
+        const auto margins = this->canvasMargins();
+        return QSizeF(size->width() * this->scale_ - margins.left() -
+                          margins.right(),
+                      size->height() * this->scale_ - margins.top() -
+                          margins.bottom());
     }
 
     // No frames loaded, use the expected size
     return this->expectedSize_.toSizeF() * this->scale_;
+}
+
+QMarginsF Image::canvasMargins() const
+{
+    if (!this->sprite_ || this->sprite_->canvasSize.isEmpty())
+    {
+        return {};
+    }
+    // only once the canvas frames are there: until then the (small)
+    // expected size is what the layout works with
+    if (!this->frames_ || !this->frames_->frameSize())
+    {
+        return {};
+    }
+    const auto margins = this->sprite_->canvasMargins();
+    return QMarginsF(margins.left() * this->scale_,
+                     margins.top() * this->scale_,
+                     margins.right() * this->scale_,
+                     margins.bottom() * this->scale_);
 }
 
 void Image::actuallyLoad()
@@ -882,7 +971,8 @@ void Image::actuallyLoad()
             // browser. Slicing the first frame as a sprite sheet would throw
             // the image's animation away.
             const bool nativePosed =
-                supportsAnimation && spec.hasPoses() &&
+                supportsAnimation && spec.hasPoses() && !spec.hasOverlays() &&
+                spec.canvasSize.isEmpty() &&
                 (apng || reportedFrameCount > 1) && spec.frameSize == size &&
                 std::all_of(spec.offsets.begin(), spec.offsets.end(),
                             [](const QPoint &p) {
@@ -953,7 +1043,8 @@ void Image::actuallyLoad()
             }
 
             const bool fullImageFrame =
-                !spec.hasPoses() && spec.offsets.size() == 1 &&
+                !spec.hasPoses() && !spec.hasOverlays() &&
+                spec.canvasSize.isEmpty() && spec.offsets.size() == 1 &&
                 spec.offsets.front() == QPoint(0, 0) && spec.frameSize == size;
             if (supportsAnimation && fullImageFrame)
             {

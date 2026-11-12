@@ -11,6 +11,7 @@ namespace chatterino {
 class DggAssets;
 class DggChannel;
 struct DggChatMessage;
+struct DggDeath;
 struct DggUser;
 
 /// Builds the messages shown in the destiny.gg channel.
@@ -40,6 +41,13 @@ public:
                                         const QDateTime &time,
                                         const QString &text, bool backlog,
                                         bool moderation);
+
+    /// A `DEATH` line, like the site shows it: a warning icon, the nick in
+    /// its flair colour and the cause in italics (with emotes). Flagged as a
+    /// system line, so greying out the dead user's messages skips it.
+    static MessagePtrMut makeDeathMessage(DggChannel *channel,
+                                          const DggDeath &death, bool backlog,
+                                          const DggAssets &assets);
 
     /// A broadcast from a moderator or the system, shown in bold.
     static MessagePtrMut makeBroadcastMessage(DggChannel *channel,
